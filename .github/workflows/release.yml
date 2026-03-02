@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for cross-compilation)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../linkly-${{ matrix.target }}.tar.gz linkly
+        shell: bash
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../linkly-${{ matrix.target }}.zip linkly.exe
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linkly-${{ matrix.target }}
+          path: linkly-${{ matrix.target }}.${{ matrix.archive }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Install rclone
+        run: |
+          curl -O https://downloads.rclone.org/current/rclone-current-linux-amd64.deb
+          sudo dpkg -i rclone-current-linux-amd64.deb
+
+      - name: Configure rclone for R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '[r2]\ntype = s3\nprovider = Cloudflare\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\nacl = private\nno_check_bucket = true\n' \
+            "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" "$R2_ENDPOINT" \
+            > ~/.config/rclone/rclone.conf
+
+      - name: Upload to R2
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          for dir in artifacts/linkly-*/; do
+            file=$(ls "$dir"linkly-*.*)
+            filename=$(basename "$file")
+            rclone copyto "$file" "r2:linkly-updater/cli/v${VERSION}/${filename}"
+            rclone copyto "$file" "r2:linkly-updater/cli/latest/${filename}"
+          done
+
+      - name: Generate and upload latest.json
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          BASE="https://updater.linkly.ai/cli/v${VERSION}"
+
+          jq -n \
+            --arg v "$VERSION" \
+            --arg darwin_arm "${BASE}/linkly-aarch64-apple-darwin.tar.gz" \
+            --arg darwin_x64 "${BASE}/linkly-x86_64-apple-darwin.tar.gz" \
+            --arg linux_x64 "${BASE}/linkly-x86_64-unknown-linux-gnu.tar.gz" \
+            --arg linux_arm "${BASE}/linkly-aarch64-unknown-linux-gnu.tar.gz" \
+            --arg win_x64 "${BASE}/linkly-x86_64-pc-windows-msvc.zip" \
+            '{
+              version: $v,
+              assets: {
+                "darwin-aarch64": $darwin_arm,
+                "darwin-x86_64": $darwin_x64,
+                "linux-x86_64": $linux_x64,
+                "linux-aarch64": $linux_arm,
+                "windows-x86_64": $win_x64
+              }
+            }' > latest.json
+
+          rclone copyto latest.json "r2:linkly-updater/cli/latest.json"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/linkly-*/*
+          generate_release_notes: true
