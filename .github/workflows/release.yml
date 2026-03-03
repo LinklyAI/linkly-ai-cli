@@ -89,9 +89,7 @@ jobs:
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Install rclone
-        run: |
-          curl -O https://downloads.rclone.org/current/rclone-current-linux-amd64.deb
-          sudo dpkg -i rclone-current-linux-amd64.deb
+        uses: AnimMouse/setup-rclone@v1
 
       - name: Configure rclone for R2
         env:
