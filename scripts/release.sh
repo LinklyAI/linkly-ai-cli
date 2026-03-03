@@ -101,11 +101,11 @@ generate_release_notes() {
 
 update_cargo_version() {
   # Update version in Cargo.toml — replace only the first 'version = "..."' (under [package])
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "0,/^version = \".*\"/s//version = \"$NEW_VERSION\"/" Cargo.toml
-  else
-    sed -i "0,/^version = \".*\"/s//version = \"$NEW_VERSION\"/" Cargo.toml
-  fi
+  # Uses awk for cross-platform compatibility (BSD sed doesn't support 0,/pattern/ ranges)
+  awk -v new="$NEW_VERSION" '
+    done==0 && /^version = ".*"/ { sub(/"[^"]*"/, "\"" new "\""); done=1 }
+    { print }
+  ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 
   # Regenerate Cargo.lock
   cargo generate-lockfile --quiet 2>/dev/null || true
