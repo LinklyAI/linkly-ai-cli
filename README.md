@@ -4,35 +4,41 @@ Command-line interface for [Linkly AI](https://linkly.ai) — search your local 
 
 The CLI connects to the Linkly AI desktop app's MCP server, giving you fast access to your indexed documents without leaving the terminal.
 
+## Prerequisites
+
+The **Linkly AI desktop app** must be running with MCP server enabled. The CLI automatically discovers the app via `~/.linkly/port`.
+
 ## Installation
 
-### From Binary (Recommended)
-
-Download the latest release for your platform:
+### macOS / Linux
 
 ```bash
-# macOS (Apple Silicon)
-curl -L https://updater.linkly.ai/cli/latest/darwin-aarch64.tar.gz | tar xz
-sudo mv linkly /usr/local/bin/
-
-# macOS (Intel)
-curl -L https://updater.linkly.ai/cli/latest/darwin-x86_64.tar.gz | tar xz
-sudo mv linkly /usr/local/bin/
-
-# Linux (x86_64)
-curl -L https://updater.linkly.ai/cli/latest/linux-x86_64.tar.gz | tar xz
-sudo mv linkly /usr/local/bin/
+curl -sSL https://updater.linkly.ai/cli/install.sh | sh
 ```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://updater.linkly.ai/cli/install.ps1 | iex
+```
+
+### GitHub Releases
+
+Pre-built binaries for all platforms are available on the [Releases](https://github.com/nicepkg/linkly-ai-cli/releases) page.
+
+| Platform              | File                                      |
+| --------------------- | ----------------------------------------- |
+| macOS (Apple Silicon) | `linkly-aarch64-apple-darwin.tar.gz`      |
+| macOS (Intel)         | `linkly-x86_64-apple-darwin.tar.gz`       |
+| Linux (x86_64)        | `linkly-x86_64-unknown-linux-gnu.tar.gz`  |
+| Linux (ARM64)         | `linkly-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows (x64)         | `linkly-x86_64-pc-windows-msvc.zip`       |
 
 ### From Source
 
 ```bash
 cargo install --path .
 ```
-
-## Prerequisites
-
-The Linkly AI desktop app must be running with MCP server enabled. The CLI automatically discovers the app via `~/.linkly/port`.
 
 ## Usage
 
@@ -41,10 +47,17 @@ The Linkly AI desktop app must be running with MCP server enabled. The CLI autom
 ```bash
 linkly search "machine learning"
 linkly search "API design" --limit 5
-linkly search "notes" --type md,txt
+linkly search "notes" --type pdf,md,docx
 ```
 
+| Option           | Description                                                             |
+| ---------------- | ----------------------------------------------------------------------- |
+| `--limit <N>`    | Maximum results (default: 20, max: 50)                                  |
+| `--type <types>` | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`) |
+
 ### View Document Outline
+
+Get structural outlines for one or more documents (IDs come from search results):
 
 ```bash
 linkly outline <doc-id>
@@ -58,6 +71,11 @@ linkly read <doc-id>
 linkly read <doc-id> --offset 50 --limit 100
 ```
 
+| Option         | Description                        |
+| -------------- | ---------------------------------- |
+| `--offset <N>` | Starting line number (1-based)     |
+| `--limit <N>`  | Number of lines to read (max: 500) |
+
 ### Check Status
 
 ```bash
@@ -66,7 +84,7 @@ linkly status
 
 ### MCP Bridge Mode
 
-Use as a stdio MCP server for Claude Desktop or other MCP clients:
+Run as a stdio MCP server for Claude Desktop, Cursor, or other MCP clients:
 
 ```bash
 linkly mcp
@@ -93,11 +111,13 @@ linkly self-update
 
 ## Global Options
 
-| Flag | Description |
-|------|-------------|
-| `--endpoint <url>` | Connect to a specific MCP endpoint (e.g. LAN access) |
-| `--json` | Output in JSON format |
-| `-v, --verbose` | Verbose output |
+| Flag               | Description                                                                |
+| ------------------ | -------------------------------------------------------------------------- |
+| `--endpoint <url>` | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`) |
+| `--json`           | Output in JSON format (useful for scripting)                               |
+| `-v, --verbose`    | Verbose output                                                             |
+| `-V, --version`    | Print version                                                              |
+| `-h, --help`       | Print help                                                                 |
 
 ## Examples
 
