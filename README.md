@@ -115,7 +115,6 @@ linkly self-update
 | ------------------ | -------------------------------------------------------------------------- |
 | `--endpoint <url>` | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`) |
 | `--json`           | Output in JSON format (useful for scripting)                               |
-| `-v, --verbose`    | Verbose output                                                             |
 | `-V, --version`    | Print version                                                              |
 | `-h, --help`       | Print help                                                                 |
 

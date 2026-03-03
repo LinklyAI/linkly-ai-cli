@@ -18,6 +18,9 @@ pub async fn run(
     if let Some(limit) = limit {
         args["limit"] = serde_json::json!(limit);
     }
+    if json_mode {
+        args["output_format"] = serde_json::json!("json");
+    }
 
     match client.call_tool("read", args).await {
         Ok(content) => output::print_result(&content, json_mode),

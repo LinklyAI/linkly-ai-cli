@@ -17,10 +17,6 @@ pub struct Cli {
     /// Output in JSON format
     #[arg(long, global = true)]
     pub json: bool,
-
-    /// Verbose output
-    #[arg(long, short, global = true)]
-    pub verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -42,6 +38,7 @@ pub enum Command {
     /// Get document outlines by IDs
     Outline {
         /// Document IDs (from search results)
+        #[arg(required = true)]
         ids: Vec<String>,
     },
 
