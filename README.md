@@ -114,4 +114,4 @@ linkly read abc123 --limit 50 | head -20
 
 ## License
 
-MIT
+Apache-2.0
