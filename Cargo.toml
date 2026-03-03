@@ -1,6 +1,6 @@
 [package]
 name = "linkly-ai-cli"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "CLI for Linkly AI - search your local documents from the terminal"
 license = "Apache-2.0"
