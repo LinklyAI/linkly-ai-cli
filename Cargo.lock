@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "linkly-ai-cli"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
