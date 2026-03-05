@@ -22,9 +22,22 @@ curl -sSL https://updater.linkly.ai/cli/install.sh | sh
 irm https://updater.linkly.ai/cli/install.ps1 | iex
 ```
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap LinklyAI/tap
+brew install linkly
+```
+
+### Cargo
+
+```bash
+cargo install linkly-ai-cli
+```
+
 ### GitHub Releases
 
-Pre-built binaries for all platforms are available on the [Releases](https://github.com/nicepkg/linkly-ai-cli/releases) page.
+Pre-built binaries for all platforms are available on the [Releases](https://github.com/LinklyAI/linkly-ai-cli/releases) page.
 
 | Platform              | File                                      |
 | --------------------- | ----------------------------------------- |

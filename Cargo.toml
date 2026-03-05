@@ -5,6 +5,10 @@ edition = "2021"
 description = "CLI for Linkly AI - search your local documents from the terminal"
 license = "Apache-2.0"
 repository = "https://github.com/LinklyAI/linkly-ai-cli"
+homepage = "https://linkly.ai"
+readme = "README.md"
+keywords = ["cli", "ai", "search", "mcp", "knowledge"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "linkly"

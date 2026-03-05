@@ -151,3 +151,76 @@ jobs:
         with:
           files: artifacts/linkly-*/*
           generate_release_notes: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --no-verify
+
+      - name: Update Homebrew Tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          BASE="https://updater.linkly.ai/cli/v${VERSION}"
+
+          # Calculate SHA256 for each platform
+          SHA_DARWIN_ARM=$(sha256sum artifacts/linkly-aarch64-apple-darwin/linkly-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_DARWIN_X64=$(sha256sum artifacts/linkly-x86_64-apple-darwin/linkly-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_X64=$(sha256sum artifacts/linkly-x86_64-unknown-linux-gnu/linkly-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM=$(sha256sum artifacts/linkly-aarch64-unknown-linux-gnu/linkly-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+
+          # Generate formula
+          cat > linkly.rb << FORMULA
+          class Linkly < Formula
+            desc "CLI for Linkly AI - search your local documents from the terminal"
+            homepage "https://linkly.ai"
+            license "Apache-2.0"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE}/linkly-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_DARWIN_ARM}"
+              else
+                url "${BASE}/linkly-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_DARWIN_X64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE}/linkly-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_ARM}"
+              else
+                url "${BASE}/linkly-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_X64}"
+              end
+            end
+
+            def install
+              bin.install "linkly"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/linkly --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading spaces from heredoc
+          sed -i 's/^          //' linkly.rb
+
+          # Push to homebrew-tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/LinklyAI/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp linkly.rb tap/Formula/linkly.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/linkly.rb
+          git commit -m "linkly ${VERSION}"
+          git push
