@@ -35,6 +35,43 @@ pub enum Command {
         r#type: Option<Vec<String>>,
     },
 
+    /// Locate specific lines within a document by regex pattern
+    Grep {
+        /// Regular expression pattern
+        pattern: String,
+
+        /// Document ID to search within (from search results)
+        doc_id: String,
+
+        /// Lines of context before and after each match
+        #[arg(short = 'C', long)]
+        context: Option<usize>,
+
+        /// Lines of context before each match
+        #[arg(short = 'B', long)]
+        before: Option<usize>,
+
+        /// Lines of context after each match
+        #[arg(short = 'A', long)]
+        after: Option<usize>,
+
+        /// Case-insensitive matching
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+
+        /// Output mode: content, count
+        #[arg(long)]
+        mode: Option<String>,
+
+        /// Maximum number of matches (default: 20, max: 100)
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Number of matches to skip for pagination
+        #[arg(long)]
+        offset: Option<usize>,
+    },
+
     /// Get document outlines by IDs
     Outline {
         /// Document IDs (from search results)

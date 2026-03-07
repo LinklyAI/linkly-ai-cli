@@ -48,6 +48,34 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let client = client::McpClient::connect(&conn.mcp_url).await?;
             commands::search::run(&client, &query, limit, r#type, cli.json).await
         }
+        Command::Grep {
+            pattern,
+            doc_id,
+            context,
+            before,
+            after,
+            ignore_case,
+            mode,
+            limit,
+            offset,
+        } => {
+            let conn = connection::resolve(cli.endpoint.as_deref())?;
+            let client = client::McpClient::connect(&conn.mcp_url).await?;
+            commands::grep::run(
+                &client,
+                &pattern,
+                &doc_id,
+                context,
+                before,
+                after,
+                ignore_case,
+                mode,
+                limit,
+                offset,
+                cli.json,
+            )
+            .await
+        }
         Command::Outline { ids } => {
             let conn = connection::resolve(cli.endpoint.as_deref())?;
             let client = client::McpClient::connect(&conn.mcp_url).await?;

@@ -1,3 +1,4 @@
+pub mod grep;
 pub mod mcp;
 pub mod outline;
 pub mod read;

@@ -77,6 +77,23 @@ linkly outline <doc-id>
 linkly outline <id1> <id2> <id3>
 ```
 
+### Locate Lines in a Document
+
+```bash
+linkly grep "pattern" <doc-id>
+linkly grep "error|warning" <doc-id> -C 3 -i
+linkly grep "TODO" <doc-id> --mode count
+```
+
+| Option          | Description                                  |
+| --------------- | -------------------------------------------- |
+| `-C, --context` | Lines of context before and after each match |
+| `-B, --before`  | Lines of context before each match           |
+| `-A, --after`   | Lines of context after each match            |
+| `-i`            | Case-insensitive matching                    |
+| `--mode`        | Output mode: `content` or `count`            |
+| `--limit`       | Maximum matches (default: 20, max: 100)      |
+
 ### Read Document Content
 
 ```bash
