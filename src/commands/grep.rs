@@ -14,6 +14,7 @@ pub async fn run(
     mode: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+    fuzzy_whitespace: Option<bool>,
     json_mode: bool,
 ) -> Result<()> {
     let mut args = serde_json::json!({
@@ -41,6 +42,9 @@ pub async fn run(
     }
     if let Some(o) = offset {
         args["offset"] = serde_json::json!(o);
+    }
+    if let Some(fw) = fuzzy_whitespace {
+        args["fuzzy_whitespace"] = serde_json::json!(fw);
     }
     if json_mode {
         args["output_format"] = serde_json::json!("json");

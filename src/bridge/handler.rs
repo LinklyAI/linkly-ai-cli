@@ -45,6 +45,10 @@ pub struct SearchInput {
         description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"txt\", \"html\"]"
     )]
     pub doc_types: Option<Vec<String>>,
+
+    #[serde(default)]
+    #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
+    pub output_format: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -57,6 +61,10 @@ pub struct OutlineInput {
         description = "Node IDs to expand (e.g. [\"2\", \"3.1\"]). When provided, only specified nodes are fully expanded; others are collapsed. When omitted, shows as many levels as fit within the budget."
     )]
     pub expand: Option<Vec<String>>,
+
+    #[serde(default)]
+    #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
+    pub output_format: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -96,6 +104,16 @@ pub struct GrepInput {
     #[serde(default)]
     #[schemars(description = "Number of matches to skip for pagination (default: 0)")]
     pub offset: Option<usize>,
+
+    #[serde(default)]
+    #[schemars(
+        description = "Fuzzy whitespace matching for PDF noise tolerance. null/omit = auto (PDF on, others off), true = force on, false = force off"
+    )]
+    pub fuzzy_whitespace: Option<bool>,
+
+    #[serde(default)]
+    #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
+    pub output_format: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -110,6 +128,10 @@ pub struct ReadInput {
     #[serde(default)]
     #[schemars(description = "Number of lines to read (default: 200, max: 500)")]
     pub limit: Option<usize>,
+
+    #[serde(default)]
+    #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
+    pub output_format: Option<String>,
 }
 
 // ── Tool implementations ────────────────────────────────

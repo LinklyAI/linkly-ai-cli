@@ -70,6 +70,10 @@ pub enum Command {
         /// Number of matches to skip for pagination
         #[arg(long)]
         offset: Option<usize>,
+
+        /// Fuzzy whitespace matching (auto for PDF, force on/off)
+        #[arg(long)]
+        fuzzy_whitespace: Option<bool>,
     },
 
     /// Get document outlines by IDs

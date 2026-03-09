@@ -58,6 +58,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             mode,
             limit,
             offset,
+            fuzzy_whitespace,
         } => {
             let conn = connection::resolve(cli.endpoint.as_deref())?;
             let client = client::McpClient::connect(&conn.mcp_url).await?;
@@ -72,6 +73,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 mode,
                 limit,
                 offset,
+                fuzzy_whitespace,
                 cli.json,
             )
             .await
