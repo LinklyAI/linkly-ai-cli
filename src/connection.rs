@@ -16,6 +16,8 @@ pub struct ConnectionInfo {
     pub base_url: String,
     /// Optional auth header value (e.g. "Bearer lkai_xxx")
     pub auth_header: Option<String>,
+    /// Whether this is a remote tunnel connection (mcp.linkly.ai)
+    pub is_remote: bool,
 }
 
 /// Resolve the MCP endpoint.
@@ -41,6 +43,7 @@ pub fn resolve(
             mcp_url: mcp,
             base_url: base,
             auth_header,
+            is_remote: false,
         });
     }
 
@@ -58,6 +61,7 @@ pub fn resolve(
             mcp_url: REMOTE_MCP_URL.to_string(),
             base_url: REMOTE_BASE_URL.to_string(),
             auth_header: Some(format!("Bearer {}", api_key)),
+            is_remote: true,
         });
     }
 
@@ -93,6 +97,7 @@ pub fn resolve(
         mcp_url: mcp,
         base_url: base,
         auth_header: None,
+        is_remote: false,
     })
 }
 

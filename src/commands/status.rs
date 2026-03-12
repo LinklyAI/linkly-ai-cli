@@ -5,6 +5,7 @@ use serde::Deserialize;
 use crate::connection::ConnectionInfo;
 use crate::output;
 
+/// Local desktop health response schema (GET /health)
 #[derive(Deserialize)]
 struct HealthResponse {
     version: String,
@@ -13,7 +14,21 @@ struct HealthResponse {
     index_status: String,
 }
 
+/// Remote tunnel health response schema (GET /mcp/health)
+#[derive(Deserialize)]
+struct RemoteHealthResponse {
+    status: String,
+    tunnel: Option<String>,
+}
+
 pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
+    if conn.is_remote {
+        return run_remote(conn, json_mode).await;
+    }
+    run_local(conn, json_mode).await
+}
+
+async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let url = format!("{}/health", conn.base_url);
 
     let client = reqwest::Client::new();
@@ -80,6 +95,80 @@ pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             format_number(health.doc_count)
         );
         println!("  {} {}", "Index:".dimmed(), index_display);
+    }
+
+    Ok(())
+}
+
+async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
+    let url = format!("{}/mcp/health", conn.base_url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
+    let mut req = client.get(&url);
+    if let Some(ref auth) = conn.auth_header {
+        req = req.header("Authorization", auth);
+    }
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(_) => {
+            if json_mode {
+                output::print_error("Remote server unreachable", json_mode);
+            } else {
+                eprintln!(
+                    "{}\n  {}  Unreachable",
+                    "Linkly AI Remote Status".bold(),
+                    "Server:".dimmed()
+                );
+            }
+            return Ok(());
+        }
+    };
+
+    let status_code = resp.status().as_u16();
+    if status_code == 401 || status_code == 403 {
+        if json_mode {
+            output::print_error(&format!("Authentication failed ({})", status_code), json_mode);
+        } else {
+            eprintln!(
+                "{}\n  {}  Authentication failed ({})",
+                "Linkly AI Remote Status".bold(),
+                "Auth:".dimmed(),
+                status_code
+            );
+        }
+        return Ok(());
+    }
+
+    let health: RemoteHealthResponse = resp.json().await?;
+    let tunnel_status = health.tunnel.as_deref().unwrap_or("unknown");
+
+    if json_mode {
+        let obj = serde_json::json!({
+            "status": "success",
+            "mode": "remote",
+            "cli_version": env!("CARGO_PKG_VERSION"),
+            "server_status": health.status,
+            "tunnel": tunnel_status,
+        });
+        println!("{}", obj);
+    } else {
+        let tunnel_display = match tunnel_status {
+            "connected" => "Connected".green().to_string(),
+            "disconnected" => "Disconnected".red().to_string(),
+            other => other.yellow().to_string(),
+        };
+
+        println!("{}", "Linkly AI Remote Status".bold());
+        println!(
+            "  {}  v{}",
+            "CLI:".dimmed(),
+            env!("CARGO_PKG_VERSION")
+        );
+        println!("  {}  {}", "Server:".dimmed(), health.status);
+        println!("  {}  {}", "Tunnel:".dimmed(), tunnel_display);
+        println!("  {}  https://mcp.linkly.ai/mcp", "MCP:".dimmed());
     }
 
     Ok(())

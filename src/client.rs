@@ -35,7 +35,7 @@ impl McpClient {
     /// Connect to the MCP server. Performs a pre-flight health check to
     /// provide clear error messages for auth/network failures.
     pub async fn connect(conn: &ConnectionInfo) -> Result<Self> {
-        preflight_check(&conn.base_url, conn.auth_header.as_deref()).await?;
+        preflight_check(&conn.base_url, conn.auth_header.as_deref(), conn.is_remote).await?;
 
         let mut config = StreamableHttpClientTransportConfig::with_uri(&*conn.mcp_url);
         if let Some(header) = &conn.auth_header {
@@ -82,10 +82,15 @@ impl McpClient {
     }
 }
 
-/// Pre-flight health check: sends GET /health to verify connectivity and auth
-/// before establishing the MCP session.
-async fn preflight_check(base_url: &str, auth_header: Option<&str>) -> Result<()> {
-    let health_url = format!("{}/health", base_url);
+/// Pre-flight health check: verifies connectivity and auth before establishing the MCP session.
+/// Local mode: GET /health (desktop app health endpoint)
+/// Remote mode: GET /mcp/health (tunnel health endpoint, requires auth)
+async fn preflight_check(base_url: &str, auth_header: Option<&str>, is_remote: bool) -> Result<()> {
+    let health_url = if is_remote {
+        format!("{}/mcp/health", base_url)
+    } else {
+        format!("{}/health", base_url)
+    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
