@@ -10,8 +10,10 @@ use crate::connection;
 /// This creates a stdio MCP server that Claude Desktop (or any MCP client)
 /// can connect to. All tool calls are transparently forwarded to the
 /// Linkly AI desktop app's HTTP MCP server.
+///
+/// Only supports local and LAN endpoint modes (no --remote/--token).
+/// When `--endpoint` is used, the URL is normalized through `connection::resolve`.
 pub async fn run(endpoint: Option<&str>) -> Result<()> {
-    // MCP bridge currently only supports local/endpoint mode (no --remote/--token)
     let conn = connection::resolve(endpoint, None, false)?;
 
     // Connect to the desktop app's MCP server

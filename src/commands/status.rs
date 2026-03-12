@@ -52,6 +52,24 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         }
     };
 
+    let status_code = resp.status().as_u16();
+    if !(200..300).contains(&status_code) {
+        let body = resp.text().await.unwrap_or_default();
+        let body_trimmed = body.trim();
+        if status_code == 401 {
+            anyhow::bail!(
+                "Authentication failed (401){}\n\
+                 For LAN access: use --endpoint <url> --token <token>\n\
+                 For remote access: run `linkly auth set-key <api-key>`",
+                if body_trimmed.is_empty() { String::new() } else { format!(": {}", body_trimmed) }
+            );
+        }
+        if body_trimmed.is_empty() {
+            anyhow::bail!("Server error (HTTP {})", status_code);
+        }
+        anyhow::bail!("Server error (HTTP {}): {}", status_code, body_trimmed);
+    }
+
     let health: HealthResponse = resp.json().await?;
 
     if json_mode {
@@ -128,17 +146,29 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
 
     let status_code = resp.status().as_u16();
     if status_code == 401 || status_code == 403 {
+        let msg = format!(
+            "Authentication failed ({}). Check your API key with `linkly auth set-key <api-key>`.",
+            status_code
+        );
         if json_mode {
-            output::print_error(&format!("Authentication failed ({})", status_code), json_mode);
+            output::print_error(&msg, json_mode);
         } else {
             eprintln!(
-                "{}\n  {}  Authentication failed ({})",
+                "{}\n  {}  {}",
                 "Linkly AI Remote Status".bold(),
                 "Auth:".dimmed(),
-                status_code
+                msg
             );
         }
         return Ok(());
+    }
+    if !(200..300).contains(&status_code) {
+        let body = resp.text().await.unwrap_or_default();
+        let body_trimmed = body.trim();
+        if body_trimmed.is_empty() {
+            anyhow::bail!("Server error (HTTP {})", status_code);
+        }
+        anyhow::bail!("Server error (HTTP {}): {}", status_code, body_trimmed);
     }
 
     let health: RemoteHealthResponse = resp.json().await?;

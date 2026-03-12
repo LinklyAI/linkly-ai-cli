@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -10,21 +10,25 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
-    #[arg(long, global = true)]
-    pub endpoint: Option<String>,
-
-    /// Bearer token for LAN or remote authentication
-    #[arg(long, global = true)]
-    pub token: Option<String>,
-
-    /// Connect via remote tunnel (mcp.linkly.ai)
-    #[arg(long, global = true, conflicts_with = "endpoint")]
-    pub remote: bool,
-
     /// Output in JSON format
     #[arg(long, global = true)]
     pub json: bool,
+}
+
+/// Connection parameters for commands that talk to the Linkly AI server.
+#[derive(Args, Clone, Debug)]
+pub struct ConnectionArgs {
+    /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
+    #[arg(long, requires = "token")]
+    pub endpoint: Option<String>,
+
+    /// Bearer token for LAN authentication (requires --endpoint)
+    #[arg(long, requires = "endpoint")]
+    pub token: Option<String>,
+
+    /// Connect via remote tunnel (https://mcp.linkly.ai)
+    #[arg(long, conflicts_with_all = ["endpoint", "token"])]
+    pub remote: bool,
 }
 
 #[derive(Subcommand)]
@@ -41,6 +45,9 @@ pub enum Command {
         /// Filter by document types (comma-separated, e.g. pdf,md,docx)
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
     },
 
     /// Locate specific lines within a document by regex pattern
@@ -82,6 +89,9 @@ pub enum Command {
         /// Fuzzy whitespace matching (auto for PDF, force on/off)
         #[arg(long)]
         fuzzy_whitespace: Option<bool>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
     },
 
     /// Get document outlines by IDs
@@ -89,6 +99,9 @@ pub enum Command {
         /// Document IDs (from search results)
         #[arg(required = true)]
         ids: Vec<String>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
     },
 
     /// Read document content by ID
@@ -103,13 +116,23 @@ pub enum Command {
         /// Number of lines to read (max: 500)
         #[arg(long)]
         limit: Option<usize>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
     },
 
     /// Show Linkly AI app status
-    Status,
+    Status {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
 
     /// Run as MCP stdio bridge (for Claude Desktop, etc.)
-    Mcp,
+    Mcp {
+        /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
+        #[arg(long)]
+        endpoint: Option<String>,
+    },
 
     /// Update to the latest version
     SelfUpdate,

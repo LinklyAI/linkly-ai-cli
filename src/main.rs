@@ -3,16 +3,18 @@ mod cli;
 mod client;
 mod commands;
 mod connection;
+mod constants;
 mod output;
 #[cfg(test)]
 mod test_helpers;
 
 use clap::Parser;
-use cli::{Cli, Command, AuthAction};
+use cli::{AuthAction, Cli, Command, ConnectionArgs};
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let json_mode = cli.json;
 
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
@@ -20,11 +22,13 @@ async fn main() {
     let result = run(cli).await;
 
     // Show update hint if available (only in non-JSON mode)
-    if let Ok(Some(new_version)) = update_check.await {
-        eprintln!(
-            "\nA new version is available: v{}. Run `linkly self-update` to upgrade.",
-            new_version
-        );
+    if !json_mode {
+        if let Ok(Some(new_version)) = update_check.await {
+            eprintln!(
+                "\nA new version is available: v{}. Run `linkly self-update` to upgrade.",
+                new_version
+            );
+        }
     }
 
     if let Err(e) = result {
@@ -33,45 +37,30 @@ async fn main() {
     }
 }
 
+fn resolve_conn(conn: &ConnectionArgs) -> anyhow::Result<connection::ConnectionInfo> {
+    connection::resolve(conn.endpoint.as_deref(), conn.token.as_deref(), conn.remote)
+}
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    // Extract shared fields before consuming cli.command
     let json_mode = cli.json;
-    let endpoint = cli.endpoint;
-    let token = cli.token;
-    let remote = cli.remote;
-
-    // Macro-like helper to reduce repetition
-    macro_rules! conn {
-        () => {
-            connection::resolve(endpoint.as_deref(), token.as_deref(), remote)?
-        };
-    }
 
     match cli.command {
         Command::Auth { action } => match action {
             AuthAction::SetKey { key } => commands::auth::set_key(&key),
         },
-        Command::Status => {
-            let conn = conn!();
+        Command::Status { conn } => {
+            let conn = resolve_conn(&conn)?;
             commands::status::run(&conn, json_mode).await
         }
         Command::SelfUpdate => commands::self_update::run().await,
-        Command::Mcp => {
-            if remote {
-                anyhow::bail!("`linkly mcp` does not support --remote.");
-            }
-            if token.is_some() {
-                anyhow::bail!("`linkly mcp` does not support --token.");
-            }
-            commands::mcp::run(endpoint.as_deref()).await
-        }
+        Command::Mcp { endpoint } => commands::mcp::run(endpoint.as_deref()).await,
         Command::Search {
             query,
             limit,
             r#type,
+            conn,
         } => {
-            let conn = conn!();
+            let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::search::run(&client, &query, limit, r#type, json_mode).await
         }
@@ -86,8 +75,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             limit,
             offset,
             fuzzy_whitespace,
+            conn,
         } => {
-            let conn = conn!();
+            let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::grep::run(
                 &client,
@@ -105,13 +95,18 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Command::Outline { ids } => {
-            let conn = conn!();
+        Command::Outline { ids, conn } => {
+            let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::outline::run(&client, &ids, json_mode).await
         }
-        Command::Read { id, offset, limit } => {
-            let conn = conn!();
+        Command::Read {
+            id,
+            offset,
+            limit,
+            conn,
+        } => {
+            let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::read::run(&client, &id, offset, limit, json_mode).await
         }

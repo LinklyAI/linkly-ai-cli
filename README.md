@@ -6,7 +6,7 @@ The CLI connects to the Linkly AI desktop app's MCP server, giving you fast acce
 
 ## Prerequisites
 
-The **Linkly AI desktop app** must be running with MCP server enabled. The CLI automatically discovers the app via `~/.linkly/port`.
+By default, the **Linkly AI desktop app** must be running with MCP server enabled. The CLI automatically discovers the app via `~/.linkly/port`. Alternatively, use LAN mode (`--endpoint` + `--token`) or Remote mode (`--remote` with a saved API key) — see [Connection Modes](#connection-modes).
 
 ## Installation
 
@@ -143,17 +143,19 @@ linkly self-update
 
 The CLI supports three connection modes:
 
-| Mode       | Flag               | How it works                                      |
-| ---------- | ------------------ | ------------------------------------------------- |
-| **Local**  | _(default)_        | Reads `~/.linkly/port`, connects to `127.0.0.1`   |
-| **LAN**    | `--endpoint <url>` | Direct connection to a specific address           |
-| **Remote** | `--remote`         | Connects via `mcp.linkly.ai` tunnel using API Key |
+| Mode       | Flags                              | Auth                          | How it works                                    |
+| ---------- | ---------------------------------- | ----------------------------- | ----------------------------------------------- |
+| **Local**  | _(default)_                        | None (localhost)              | Reads `~/.linkly/port`, connects to `127.0.0.1` |
+| **LAN**    | `--endpoint <url> --token <token>` | Bearer token from desktop app | Direct connection to a LAN device               |
+| **Remote** | `--remote`                         | API Key via `auth set-key`    | Connects via `https://mcp.linkly.ai` tunnel     |
+
+> **Note:** `--endpoint` and `--token` are required together for LAN access and conflict with `--remote`. For remote access, use `linkly auth set-key`. The `mcp` command also accepts `--endpoint` alone (without `--token`).
 
 ### Remote mode setup
 
 ```bash
 # Save your API Key (from https://linkly.ai/dashboard)
-linkly auth set-key lkai_your_api_key_here
+linkly auth set-key lkai_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # Search via remote tunnel
 linkly search "machine learning" --remote
@@ -166,16 +168,18 @@ linkly search "machine learning" --remote
 linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_lan_token
 ```
 
-## Global Options
+## Options
 
-| Flag               | Description                                                                |
-| ------------------ | -------------------------------------------------------------------------- |
-| `--endpoint <url>` | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`) |
-| `--token <token>`  | Bearer token for LAN authentication                                        |
-| `--remote`         | Connect via remote tunnel (conflicts with `--endpoint`)                    |
-| `--json`           | Output in JSON format (useful for scripting)                               |
-| `-V, --version`    | Print version                                                              |
-| `-h, --help`       | Print help                                                                 |
+Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `grep`, `outline`, `read`, and `status` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
+
+| Flag               | Scope  | Description                                                                                       |
+| ------------------ | ------ | ------------------------------------------------------------------------------------------------- |
+| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`    |
+| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)       |
+| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth set-key`) |
+| `--json`           | Global | Output in JSON format (useful for scripting)                                                      |
+| `-V, --version`    | Global | Print version                                                                                     |
+| `-h, --help`       | Global | Print help                                                                                        |
 
 ## Examples
 
