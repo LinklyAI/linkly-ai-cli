@@ -139,11 +139,40 @@ Claude Desktop configuration (`claude_desktop_config.json`):
 linkly self-update
 ```
 
+## Connection Modes
+
+The CLI supports three connection modes:
+
+| Mode       | Flag               | How it works                                      |
+| ---------- | ------------------ | ------------------------------------------------- |
+| **Local**  | _(default)_        | Reads `~/.linkly/port`, connects to `127.0.0.1`   |
+| **LAN**    | `--endpoint <url>` | Direct connection to a specific address           |
+| **Remote** | `--remote`         | Connects via `mcp.linkly.ai` tunnel using API Key |
+
+### Remote mode setup
+
+```bash
+# Save your API Key (from https://linkly.ai/dashboard)
+linkly auth set-key lkai_your_api_key_here
+
+# Search via remote tunnel
+linkly search "machine learning" --remote
+```
+
+### LAN mode with token
+
+```bash
+# Connect to another device on the same network (token from desktop Settings → MCP)
+linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_lan_token
+```
+
 ## Global Options
 
 | Flag               | Description                                                                |
 | ------------------ | -------------------------------------------------------------------------- |
 | `--endpoint <url>` | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`) |
+| `--token <token>`  | Bearer token for LAN authentication                                        |
+| `--remote`         | Connect via remote tunnel (conflicts with `--endpoint`)                    |
 | `--json`           | Output in JSON format (useful for scripting)                               |
 | `-V, --version`    | Print version                                                              |
 | `-h, --help`       | Print help                                                                 |
@@ -151,8 +180,14 @@ linkly self-update
 ## Examples
 
 ```bash
-# Search across LAN
-linkly search "budget report" --endpoint http://192.168.1.100:60606/mcp
+# Local search (default, requires desktop app running)
+linkly search "budget report"
+
+# Search across LAN with token
+linkly search "budget report" --endpoint http://192.168.1.100:60606/mcp --token abc123
+
+# Search via remote tunnel
+linkly search "TODO" --remote
 
 # JSON output for scripting
 linkly search "TODO" --json | jq '.content'

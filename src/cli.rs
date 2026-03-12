@@ -10,9 +10,17 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// MCP endpoint URL (e.g. http://127.0.0.1:60606/mcp)
+    /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
     #[arg(long, global = true)]
     pub endpoint: Option<String>,
+
+    /// Bearer token for LAN or remote authentication
+    #[arg(long, global = true)]
+    pub token: Option<String>,
+
+    /// Connect via remote tunnel (mcp.linkly.ai)
+    #[arg(long, global = true, conflicts_with = "endpoint")]
+    pub remote: bool,
 
     /// Output in JSON format
     #[arg(long, global = true)]
@@ -105,4 +113,19 @@ pub enum Command {
 
     /// Update to the latest version
     SelfUpdate,
+
+    /// Manage authentication credentials
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuthAction {
+    /// Save an API key for remote tunnel access
+    SetKey {
+        /// API key (format: lkai_...)
+        key: String,
+    },
 }

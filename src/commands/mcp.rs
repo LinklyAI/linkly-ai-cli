@@ -11,10 +11,11 @@ use crate::connection;
 /// can connect to. All tool calls are transparently forwarded to the
 /// Linkly AI desktop app's HTTP MCP server.
 pub async fn run(endpoint: Option<&str>) -> Result<()> {
-    let conn = connection::resolve(endpoint)?;
+    // MCP bridge currently only supports local/endpoint mode (no --remote/--token)
+    let conn = connection::resolve(endpoint, None, false)?;
 
     // Connect to the desktop app's MCP server
-    let client = McpClient::connect(&conn.mcp_url).await?;
+    let client = McpClient::connect(&conn).await?;
 
     // Create the bridge handler and serve over stdio
     let handler = StdioBridgeHandler::new(client);

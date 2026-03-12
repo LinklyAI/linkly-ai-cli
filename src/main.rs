@@ -4,9 +4,11 @@ mod client;
 mod commands;
 mod connection;
 mod output;
+#[cfg(test)]
+mod test_helpers;
 
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{Cli, Command, AuthAction};
 
 #[tokio::main]
 async fn main() {
@@ -31,22 +33,47 @@ async fn main() {
     }
 }
 
+
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    // Extract shared fields before consuming cli.command
+    let json_mode = cli.json;
+    let endpoint = cli.endpoint;
+    let token = cli.token;
+    let remote = cli.remote;
+
+    // Macro-like helper to reduce repetition
+    macro_rules! conn {
+        () => {
+            connection::resolve(endpoint.as_deref(), token.as_deref(), remote)?
+        };
+    }
+
     match cli.command {
+        Command::Auth { action } => match action {
+            AuthAction::SetKey { key } => commands::auth::set_key(&key),
+        },
         Command::Status => {
-            let conn = connection::resolve(cli.endpoint.as_deref())?;
-            commands::status::run(&conn, cli.json).await
+            let conn = conn!();
+            commands::status::run(&conn, json_mode).await
         }
         Command::SelfUpdate => commands::self_update::run().await,
-        Command::Mcp => commands::mcp::run(cli.endpoint.as_deref()).await,
+        Command::Mcp => {
+            if remote {
+                anyhow::bail!("`linkly mcp` does not support --remote.");
+            }
+            if token.is_some() {
+                anyhow::bail!("`linkly mcp` does not support --token.");
+            }
+            commands::mcp::run(endpoint.as_deref()).await
+        }
         Command::Search {
             query,
             limit,
             r#type,
         } => {
-            let conn = connection::resolve(cli.endpoint.as_deref())?;
-            let client = client::McpClient::connect(&conn.mcp_url).await?;
-            commands::search::run(&client, &query, limit, r#type, cli.json).await
+            let conn = conn!();
+            let client = client::McpClient::connect(&conn).await?;
+            commands::search::run(&client, &query, limit, r#type, json_mode).await
         }
         Command::Grep {
             pattern,
@@ -60,8 +87,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             offset,
             fuzzy_whitespace,
         } => {
-            let conn = connection::resolve(cli.endpoint.as_deref())?;
-            let client = client::McpClient::connect(&conn.mcp_url).await?;
+            let conn = conn!();
+            let client = client::McpClient::connect(&conn).await?;
             commands::grep::run(
                 &client,
                 &pattern,
@@ -74,19 +101,19 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 limit,
                 offset,
                 fuzzy_whitespace,
-                cli.json,
+                json_mode,
             )
             .await
         }
         Command::Outline { ids } => {
-            let conn = connection::resolve(cli.endpoint.as_deref())?;
-            let client = client::McpClient::connect(&conn.mcp_url).await?;
-            commands::outline::run(&client, &ids, cli.json).await
+            let conn = conn!();
+            let client = client::McpClient::connect(&conn).await?;
+            commands::outline::run(&client, &ids, json_mode).await
         }
         Command::Read { id, offset, limit } => {
-            let conn = connection::resolve(cli.endpoint.as_deref())?;
-            let client = client::McpClient::connect(&conn.mcp_url).await?;
-            commands::read::run(&client, &id, offset, limit, cli.json).await
+            let conn = conn!();
+            let client = client::McpClient::connect(&conn).await?;
+            commands::read::run(&client, &id, offset, limit, json_mode).await
         }
     }
 }

@@ -16,7 +16,12 @@ struct HealthResponse {
 pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let url = format!("{}/health", conn.base_url);
 
-    let resp = match reqwest::get(&url).await {
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(ref auth) = conn.auth_header {
+        req = req.header("Authorization", auth);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(_) => {
             if json_mode {
