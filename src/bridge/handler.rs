@@ -42,7 +42,7 @@ pub struct SearchInput {
 
     #[serde(default)]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"txt\", \"html\"]"
+        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"txt\", \"html\", \"image\"]"
     )]
     pub doc_types: Option<Vec<String>>,
 
