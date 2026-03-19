@@ -75,6 +75,7 @@ jobs:
         with:
           name: linkly-${{ matrix.target }}
           path: linkly-${{ matrix.target }}.${{ matrix.archive }}
+          retention-days: 1
 
   publish:
     needs: build
