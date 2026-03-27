@@ -2,7 +2,7 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use serde::Deserialize;
 
-use crate::connection::ConnectionInfo;
+use crate::connection::{ConnectionInfo, RemoteHealthResponse};
 use crate::output;
 
 /// Local desktop health response schema (GET /health)
@@ -12,13 +12,6 @@ struct HealthResponse {
     doc_count: u64,
     mcp_endpoint: Option<String>,
     index_status: String,
-}
-
-/// Remote tunnel health response schema (GET /mcp/health)
-#[derive(Deserialize)]
-struct RemoteHealthResponse {
-    status: String,
-    tunnel: Option<String>,
 }
 
 pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {

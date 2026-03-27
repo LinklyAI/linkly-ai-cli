@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 
 /// Remote tunnel endpoint
 const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
@@ -8,6 +9,23 @@ const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
 /// New format: { "remotes": [{ "name": "default", "key": "lkai_xxx" }] }
 /// Legacy format (still readable): { "apiKey": "lkai_xxx" }
 const CREDENTIALS_FILE: &str = "credentials.json";
+
+/// Remote tunnel health response (from DO /health endpoint).
+/// Shared across client.rs, doctor.rs, and status.rs.
+#[derive(Deserialize)]
+pub struct RemoteHealthResponse {
+    #[allow(dead_code)]
+    pub status: String,
+    pub tunnel: Option<String>,
+}
+
+/// Connection mode for error messages and doctor hints.
+#[derive(Debug, Clone)]
+pub enum ConnectionMode {
+    Local,
+    Lan { endpoint: String },
+    Remote,
+}
 
 /// Resolved connection info for the Linkly AI desktop app.
 pub struct ConnectionInfo {
@@ -19,6 +37,28 @@ pub struct ConnectionInfo {
     pub auth_header: Option<String>,
     /// Whether this is a remote tunnel connection (mcp.linkly.ai)
     pub is_remote: bool,
+    /// Connection mode for generating contextual error messages
+    pub mode: ConnectionMode,
+}
+
+impl ConnectionInfo {
+    /// Generate a `linkly doctor` command hint matching the current connection mode.
+    pub fn doctor_hint(&self) -> String {
+        match &self.mode {
+            ConnectionMode::Local => {
+                "Run 'linkly doctor' to diagnose local connection issues.".to_string()
+            }
+            ConnectionMode::Lan { endpoint } => {
+                format!(
+                    "Run 'linkly doctor --endpoint {} --token <your-token>' to diagnose LAN connection issues.",
+                    endpoint
+                )
+            }
+            ConnectionMode::Remote => {
+                "Run 'linkly doctor --remote' to diagnose remote connection issues.".to_string()
+            }
+        }
+    }
 }
 
 /// Resolve the MCP endpoint.
@@ -42,11 +82,13 @@ pub fn resolve(
         let base = trimmed.strip_suffix("/mcp").unwrap_or(trimmed).to_string();
         let mcp = format!("{}/mcp", base);
         let auth_header = token.map(|t| format!("Bearer {}", t));
+        let mode = ConnectionMode::Lan { endpoint: base.clone() };
         return Ok(ConnectionInfo {
             mcp_url: mcp,
             base_url: base,
             auth_header,
             is_remote: false,
+            mode,
         });
     }
 
@@ -54,8 +96,11 @@ pub fn resolve(
     if remote {
         let api_key = read_credentials_api_key()?
             .context(
-                "No API key found for remote mode.\n\
-                 Run `linkly auth set-key <your-api-key>` first.",
+                "No API key configured for remote mode.\n\n\
+                 To set up:\n  \
+                   1. Get your API key from https://linkly.ai (Dashboard > API Keys)\n  \
+                   2. Run: linkly auth set-key <your-api-key>\n\n\
+                 Run 'linkly doctor --remote' to diagnose remote connection issues.",
             )?;
 
         return Ok(ConnectionInfo {
@@ -63,6 +108,7 @@ pub fn resolve(
             base_url: REMOTE_BASE_URL.to_string(),
             auth_header: Some(format!("Bearer {}", api_key)),
             is_remote: true,
+            mode: ConnectionMode::Remote,
         });
     }
 
@@ -71,24 +117,35 @@ pub fn resolve(
         .map(|h| h.join(".linkly").join("port"))
         .context("Cannot determine home directory")?;
 
-    let content = std::fs::read_to_string(&port_file).with_context(|| {
-        format!(
-            "Linkly AI app does not appear to be running.\n\
-             Port file not found: {}\n\
-             Start the Linkly AI desktop app first, or use --endpoint to connect manually.",
-            port_file.display()
+    let content = std::fs::read_to_string(&port_file).map_err(|_| {
+        anyhow::anyhow!(
+            "Linkly AI Desktop is not running on this machine.\n\n\
+             How to connect:\n  \
+               Local:   Launch Linkly AI Desktop on this machine\n  \
+               Remote:  linkly <command> --remote  (API key required, get it from https://linkly.ai)\n  \
+               LAN:     linkly <command> --endpoint <url> --token <token>  (find token in Desktop > Settings > MCP)\n\n\
+             Run 'linkly doctor' to diagnose local connection issues."
         )
     })?;
 
+    const PORT_FILE_CORRUPT: &str = "Linkly AI Desktop port file is corrupted.\n\
+         Try restarting the app, or delete ~/.linkly/port and relaunch.\n\n\
+         Run 'linkly doctor' to diagnose local connection issues.";
+
     let parsed: serde_json::Value =
-        serde_json::from_str(&content).context("Invalid port file format")?;
+        serde_json::from_str(&content).context(PORT_FILE_CORRUPT)?;
 
     let port = parsed["port"]
         .as_u64()
-        .context("Port file missing 'port' field")?;
+        .context(PORT_FILE_CORRUPT)?;
 
     if port == 0 || port > 65535 {
-        bail!("Invalid port number in port file: {}", port);
+        bail!(
+            "Invalid port {} in ~/.linkly/port (must be 1-65535).\n\
+             Try restarting the app, or delete ~/.linkly/port and relaunch.\n\n\
+             Run 'linkly doctor' to diagnose local connection issues.",
+            port
+        );
     }
 
     let base = format!("http://127.0.0.1:{}", port);
@@ -99,6 +156,7 @@ pub fn resolve(
         base_url: base,
         auth_header: None,
         is_remote: false,
+        mode: ConnectionMode::Local,
     })
 }
 
@@ -129,7 +187,9 @@ pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
 
     let parsed: serde_json::Value = serde_json::from_str(&content).with_context(|| {
         format!(
-            "Credentials file is corrupted: {}\nRun `linkly auth set-key <api-key>` to fix it.",
+            "Credentials file is corrupted: {}\n\
+             Run 'linkly auth set-key <your-api-key>' to fix it.\n\
+             Get your API key from https://linkly.ai (Dashboard > API Keys).",
             path.display()
         )
     })?;

@@ -20,7 +20,7 @@ pub async fn run(endpoint: Option<&str>) -> Result<()> {
     let client = McpClient::connect(&conn).await?;
 
     // Create the bridge handler and serve over stdio
-    let handler = StdioBridgeHandler::new(client);
+    let handler = StdioBridgeHandler::new(client, conn);
     let stdio = (tokio::io::stdin(), tokio::io::stdout());
     let service = handler.serve(stdio).await?;
 

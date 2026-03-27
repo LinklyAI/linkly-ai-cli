@@ -52,12 +52,15 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let conn = resolve_conn(&conn)?;
             commands::status::run(&conn, json_mode).await
         }
+        Command::Doctor { conn } => {
+            commands::doctor::run_from_args(&conn, json_mode).await
+        }
         Command::SelfUpdate => commands::self_update::run().await,
         Command::Mcp { endpoint } => commands::mcp::run(endpoint.as_deref()).await,
         Command::ListLibraries { conn } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::list_libraries::run(&client, json_mode).await
+            commands::list_libraries::run(&client, &conn, json_mode).await
         }
         Command::Search {
             query,
@@ -69,7 +72,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::search::run(&client, &query, limit, r#type, library, path_glob, json_mode)
+            commands::search::run(&client, &conn, &query, limit, r#type, library, path_glob, json_mode)
                 .await
         }
         Command::Grep {
@@ -89,6 +92,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let client = client::McpClient::connect(&conn).await?;
             commands::grep::run(
                 &client,
+                &conn,
                 &pattern,
                 &doc_id,
                 context,
@@ -106,7 +110,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Outline { ids, conn } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::outline::run(&client, &ids, json_mode).await
+            commands::outline::run(&client, &conn, &ids, json_mode).await
         }
         Command::Read {
             id,
@@ -116,7 +120,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::read::run(&client, &id, offset, limit, json_mode).await
+            commands::read::run(&client, &conn, &id, offset, limit, json_mode).await
         }
     }
 }

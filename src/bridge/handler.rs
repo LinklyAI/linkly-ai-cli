@@ -13,17 +13,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client::McpClient;
+use crate::connection::ConnectionInfo;
 
 #[derive(Clone)]
 pub struct StdioBridgeHandler {
     client: std::sync::Arc<McpClient>,
+    conn: std::sync::Arc<ConnectionInfo>,
     tool_router: ToolRouter<Self>,
 }
 
 impl StdioBridgeHandler {
-    pub fn new(client: McpClient) -> Self {
+    pub fn new(client: McpClient, conn: ConnectionInfo) -> Self {
         Self {
             client: std::sync::Arc::new(client),
+            conn: std::sync::Arc::new(conn),
             tool_router: Self::tool_router(),
         }
     }
@@ -159,7 +162,7 @@ impl StdioBridgeHandler {
 
         let content = self
             .client
-            .call_tool("list_libraries", args)
+            .call_tool("list_libraries", args, &self.conn)
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
@@ -179,7 +182,7 @@ impl StdioBridgeHandler {
 
         let content = self
             .client
-            .call_tool("search", args)
+            .call_tool("search", args, &self.conn)
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
@@ -199,7 +202,7 @@ impl StdioBridgeHandler {
 
         let content = self
             .client
-            .call_tool("outline", args)
+            .call_tool("outline", args, &self.conn)
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
@@ -219,7 +222,7 @@ impl StdioBridgeHandler {
 
         let content = self
             .client
-            .call_tool("read", args)
+            .call_tool("read", args, &self.conn)
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
@@ -239,7 +242,7 @@ impl StdioBridgeHandler {
 
         let content = self
             .client
-            .call_tool("grep", args)
+            .call_tool("grep", args, &self.conn)
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 

@@ -56,7 +56,7 @@ pub enum Command {
         #[arg(long)]
         library: Option<String>,
 
-        /// Glob pattern to filter by file path (e.g. '*.pdf', '*papers*')
+        /// SQLite GLOB pattern to filter by file path. * matches any chars (including /), ? matches one char. Examples: '*.pdf', '*papers*'
         #[arg(long)]
         path_glob: Option<String>,
 
@@ -137,6 +137,12 @@ pub enum Command {
 
     /// Show Linkly AI app status
     Status {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Diagnose connection issues (use --remote or --endpoint for non-local modes)
+    Doctor {
         #[command(flatten)]
         conn: ConnectionArgs,
     },

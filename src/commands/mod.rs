@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod doctor;
 pub mod grep;
 pub mod list_libraries;
 pub mod mcp;
