@@ -9,6 +9,8 @@ pub async fn run(
     query: &str,
     limit: Option<usize>,
     doc_types: Option<Vec<String>>,
+    library: Option<String>,
+    path_glob: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     if query.trim().is_empty() {
@@ -52,6 +54,12 @@ pub async fn run(
     }
     if let Some(types) = doc_types {
         args["doc_types"] = serde_json::json!(types);
+    }
+    if let Some(lib) = library {
+        args["library"] = serde_json::json!(lib);
+    }
+    if let Some(glob) = path_glob {
+        args["path_glob"] = serde_json::json!(glob);
     }
     if json_mode {
         args["output_format"] = serde_json::json!("json");

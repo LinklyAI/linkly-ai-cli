@@ -33,6 +33,12 @@ pub struct ConnectionArgs {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List all available knowledge libraries
+    ListLibraries {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
     /// Search indexed local documents by keywords
     Search {
         /// Search query
@@ -45,6 +51,14 @@ pub enum Command {
         /// Filter by document types (comma-separated, e.g. pdf,md,docx)
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
+
+        /// Restrict search to a specific library by name
+        #[arg(long)]
+        library: Option<String>,
+
+        /// Glob pattern to filter by file path (e.g. '*.pdf', '*papers*')
+        #[arg(long)]
+        path_glob: Option<String>,
 
         #[command(flatten)]
         conn: ConnectionArgs,
@@ -127,7 +141,7 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Run as MCP stdio bridge (for Claude Desktop, etc.)
+    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Only supports local and LAN modes; use --endpoint for LAN.
     Mcp {
         /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
         #[arg(long)]

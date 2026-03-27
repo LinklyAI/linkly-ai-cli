@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod grep;
+pub mod list_libraries;
 pub mod mcp;
 pub mod outline;
 pub mod read;

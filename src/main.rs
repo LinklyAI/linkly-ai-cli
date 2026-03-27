@@ -54,15 +54,23 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::SelfUpdate => commands::self_update::run().await,
         Command::Mcp { endpoint } => commands::mcp::run(endpoint.as_deref()).await,
+        Command::ListLibraries { conn } => {
+            let conn = resolve_conn(&conn)?;
+            let client = client::McpClient::connect(&conn).await?;
+            commands::list_libraries::run(&client, json_mode).await
+        }
         Command::Search {
             query,
             limit,
             r#type,
+            library,
+            path_glob,
             conn,
         } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::search::run(&client, &query, limit, r#type, json_mode).await
+            commands::search::run(&client, &query, limit, r#type, library, path_glob, json_mode)
+                .await
         }
         Command::Grep {
             pattern,
