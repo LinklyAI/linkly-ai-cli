@@ -31,7 +31,9 @@ pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
 async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let url = format!("{}/health", conn.base_url);
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()?;
     let mut req = client.get(&url);
     if let Some(ref auth) = conn.auth_header {
         req = req.header("Authorization", auth);

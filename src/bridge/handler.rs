@@ -29,7 +29,7 @@ impl StdioBridgeHandler {
     }
 }
 
-// ── Input types (mirror desktop app's tools.rs) ─────────
+// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/tools.rs ───
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SearchInput {
@@ -45,6 +45,18 @@ pub struct SearchInput {
         description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"txt\", \"html\", \"image\"]"
     )]
     pub doc_types: Option<Vec<String>>,
+
+    #[serde(default)]
+    #[schemars(
+        description = "Restrict search to a specific library by name. Use list_libraries to see available libraries."
+    )]
+    pub library: Option<String>,
+
+    #[serde(default)]
+    #[schemars(
+        description = "Glob pattern to filter by file path. Examples: '*.pdf' for all PDFs, '*papers*' for paths containing papers"
+    )]
+    pub path_glob: Option<String>,
 
     #[serde(default)]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
@@ -139,8 +151,24 @@ pub struct ReadInput {
 #[tool_router]
 impl StdioBridgeHandler {
     #[tool(
+        name = "list_libraries",
+        description = "List all available knowledge libraries with descriptions and document counts. Use this to discover libraries before searching within a specific one."
+    )]
+    async fn list_libraries(&self) -> Result<CallToolResult, McpError> {
+        let args = serde_json::json!({});
+
+        let content = self
+            .client
+            .call_tool("list_libraries", args)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
+    #[tool(
         name = "search",
-        description = "[Workflow: search → grep or outline → read] Search indexed local documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets. After finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest."
+        description = "[Workflow: search → grep or outline → read] Search indexed local documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets. After finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest. Use 'library' parameter to restrict search to a specific library (see list_libraries)."
     )]
     async fn search(
         &self,
@@ -200,7 +228,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "grep",
-        description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types (PDF, Markdown, DOCX, TXT, HTML). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
+        description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types (PDF, Markdown, DOCX, TXT, HTML, Image). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
     )]
     async fn grep(
         &self,
@@ -230,14 +258,16 @@ impl ServerHandler for StdioBridgeHandler {
             },
             instructions: Some(
                 "Linkly AI — full-text search, document overview, and reading service for the user's local computer.\n\
-                 Workflow: search → grep or outline → read\n\
-                 1. Use 'search' to find the most relevant documents by keywords or phrases\n\
-                 2. Use 'outline' to get document metadata and structural outlines in batch\n\
-                 3. Use 'grep' to find specific text patterns (regex) within documents\n\
-                 4. Use 'read' to read document content with line-based pagination (offset/limit)\n\
+                 Workflow: list_libraries → search → grep or outline → read\n\
+                 1. Use 'list_libraries' to discover available knowledge libraries\n\
+                 2. Use 'search' to find relevant documents (supports library and path_glob filtering)\n\
+                 3. Use 'outline' to get document metadata and structural outlines in batch\n\
+                 4. Use 'grep' to find specific text patterns (regex) within documents\n\
+                 5. Use 'read' to read document content with line-based pagination (offset/limit)\n\
                  \n\
                  Decision guide:\n\
                  - Always search first. Never fabricate document IDs.\n\
+                 - Use 'library' parameter to restrict search to a specific knowledge library\n\
                  - Document >50 lines + has_outline=true → use 'outline' before 'read'\n\
                  - Need to find specific names/dates/terms → use 'grep', not read-and-scan\n\
                  - Already know the exact text to find → 'grep' is more precise than 'search'\n\
