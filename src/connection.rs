@@ -38,10 +38,8 @@ pub fn resolve(
 ) -> Result<ConnectionInfo> {
     // Mode 1: explicit endpoint + token for LAN auth
     if let Some(ep) = endpoint {
-        let base = ep
-            .trim_end_matches('/')
-            .trim_end_matches("/mcp")
-            .to_string();
+        let trimmed = ep.trim_end_matches('/');
+        let base = trimmed.strip_suffix("/mcp").unwrap_or(trimmed).to_string();
         let mcp = format!("{}/mcp", base);
         let auth_header = token.map(|t| format!("Bearer {}", t));
         return Ok(ConnectionInfo {
