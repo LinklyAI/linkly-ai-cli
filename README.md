@@ -61,12 +61,16 @@ cargo install --path .
 linkly search "machine learning"
 linkly search "API design" --limit 5
 linkly search "notes" --type pdf,md,docx
+linkly search "attention" --library my-research
+linkly search "transformer" --path-glob "*.pdf"
 ```
 
-| Option           | Description                                                             |
-| ---------------- | ----------------------------------------------------------------------- |
-| `--limit <N>`    | Maximum results (default: 20, max: 50)                                  |
-| `--type <types>` | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`) |
+| Option              | Description                                                                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--limit <N>`       | Maximum results (default: 20, max: 50)                                                                                                          |
+| `--type <types>`    | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`)                                                                         |
+| `--library <name>`  | Restrict search to a specific library by name                                                                                                   |
+| `--path-glob <pat>` | SQLite GLOB pattern to filter by file path. `*` matches any chars (including `/`), `?` matches one char (e.g. `*.pdf`, `*papers*`, `2024/*.md`) |
 
 ### View Document Outline
 
@@ -133,6 +137,25 @@ Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
+### Diagnose Connection Issues
+
+```bash
+linkly doctor
+linkly doctor --remote
+linkly doctor --endpoint http://192.168.1.100:60606/mcp --token abc123
+```
+
+Runs a series of checks (port file, server reachability, auth, MCP round-trip) and reports pass/fail with actionable advice.
+
+### List Libraries
+
+List all available knowledge libraries (useful with `search --library`):
+
+```bash
+linkly list-libraries
+linkly list-libraries --remote
+```
+
 ### Self-Update
 
 ```bash
@@ -170,7 +193,7 @@ linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_la
 
 ## Options
 
-Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `grep`, `outline`, `read`, and `status` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
+Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `grep`, `outline`, `read`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
 
 | Flag               | Scope  | Description                                                                                       |
 | ------------------ | ------ | ------------------------------------------------------------------------------------------------- |

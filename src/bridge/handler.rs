@@ -149,6 +149,16 @@ pub struct ReadInput {
     pub output_format: Option<String>,
 }
 
+// SYNC: ExploreInput must match desktop's src/mcp/tools.rs::ExploreInput
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ExploreInput {
+    #[serde(default)]
+    #[schemars(
+        description = "Restrict to a specific library by name. Use list_libraries to see available names. Omit to explore all indexed documents."
+    )]
+    pub library: Option<String>,
+}
+
 // ── Tool implementations ────────────────────────────────
 
 #[tool_router]
@@ -163,6 +173,26 @@ impl StdioBridgeHandler {
         let content = self
             .client
             .call_tool("list_libraries", args, &self.conn)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
+    #[tool(
+        name = "explore",
+        description = "Get a bird's-eye overview of all indexed documents or a specific library. Returns document type distribution, directory structure with file counts, and top keywords with source attribution. Use this when the user wants to understand what's in their knowledge base before searching."
+    )]
+    async fn explore(
+        &self,
+        Parameters(input): Parameters<ExploreInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let args = serde_json::to_value(&input)
+            .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
+
+        let content = self
+            .client
+            .call_tool("explore", args, &self.conn)
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 

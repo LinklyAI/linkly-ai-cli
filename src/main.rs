@@ -62,6 +62,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let client = client::McpClient::connect(&conn).await?;
             commands::list_libraries::run(&client, &conn, json_mode).await
         }
+        Command::Explore { library, conn } => {
+            let conn = resolve_conn(&conn)?;
+            let client = client::McpClient::connect(&conn).await?;
+            commands::explore::run(&client, &conn, library, json_mode).await
+        }
         Command::Search {
             query,
             limit,

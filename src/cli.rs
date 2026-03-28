@@ -39,6 +39,16 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
+    /// Get a bird's-eye overview of all documents or a specific library
+    Explore {
+        /// Restrict to a specific library by name
+        #[arg(long)]
+        library: Option<String>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
     /// Search indexed local documents by keywords
     Search {
         /// Search query
