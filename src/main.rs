@@ -4,6 +4,7 @@ mod client;
 mod commands;
 mod connection;
 mod constants;
+mod manifest;
 mod output;
 #[cfg(test)]
 mod test_helpers;
@@ -18,6 +19,9 @@ async fn main() {
 
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
+
+    // Write installed manifest (best-effort, local I/O < 1ms)
+    manifest::write_manifest();
 
     let result = run(cli).await;
 

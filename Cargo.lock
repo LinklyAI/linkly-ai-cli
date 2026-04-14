@@ -1119,6 +1119,7 @@ name = "linkly-ai-cli"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "dirs",
  "flate2",
