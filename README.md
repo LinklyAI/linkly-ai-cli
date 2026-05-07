@@ -55,6 +55,22 @@ cargo install --path .
 
 ## Usage
 
+### Find Paths
+
+Locate folder candidates when you only know a fuzzy or cross-language container name (e.g. "WeChat" but the actual path contains `xinWeChat`). Pass several variants in `--patterns` so the keywords are OR-matched in a single call. Output is intended as a `--path-glob` source for `linkly search`.
+
+```bash
+linkly find-paths --patterns "WeChat,微信,wxid"
+linkly find-paths --patterns "Notion,notion" --library my-research
+linkly find-paths --patterns "Dropbox" --limit 5
+```
+
+| Option              | Description                                                                  |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `--patterns <list>` | Comma-separated keywords (OR-matched); ASCII case-insensitive, CJK literal   |
+| `--library <name>`  | Restrict to a specific library by name                                       |
+| `--limit <N>`       | Maximum folder candidates returned (default: 10, max: 50)                    |
+
 ### Search Documents
 
 ```bash
@@ -70,7 +86,7 @@ linkly search "transformer" --path-glob "*.pdf"
 | `--limit <N>`       | Maximum results (default: 20, max: 50)                                                                                                          |
 | `--type <types>`    | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`)                                                                         |
 | `--library <name>`  | Restrict search to a specific library by name                                                                                                   |
-| `--path-glob <pat>` | SQLite GLOB pattern to filter by file path. `*` matches any chars (including `/`), `?` matches one char (e.g. `*.pdf`, `*papers*`, `2024/*.md`) |
+| `--path-glob <pat>` | SQLite GLOB pattern to filter by file path. `*` matches any chars (including `/`), `?` matches one char (e.g. `*.pdf`, `*papers*`, `2024/*.md`). When the actual path is unknown, run `linkly find-paths` first to obtain it. |
 
 ### View Document Outline
 

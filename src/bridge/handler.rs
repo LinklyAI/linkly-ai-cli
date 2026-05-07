@@ -32,7 +32,7 @@ impl StdioBridgeHandler {
     }
 }
 
-// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/tools.rs ───
+// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs ───
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SearchInput {
@@ -57,7 +57,7 @@ pub struct SearchInput {
 
     #[serde(default)]
     #[schemars(
-        description = "Glob pattern to filter by file path. Examples: '*.pdf' for all PDFs, '*papers*' for paths containing papers"
+        description = "Glob pattern to filter by file path. Examples: '*.pdf' for all PDFs, '*papers*' for paths containing papers. When the user names a folder/container by a fuzzy or cross-language word and the actual path is unknown, call `find_paths` first and use a distinctive segment of the returned path here."
     )]
     pub path_glob: Option<String>,
 
@@ -149,7 +149,7 @@ pub struct ReadInput {
     pub output_format: Option<String>,
 }
 
-// SYNC: ExploreInput must match desktop's src/mcp/tools.rs::ExploreInput
+// SYNC: ExploreInput must match desktop's src/mcp/schemas.rs::ExploreInput
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ExploreInput {
     #[serde(default)]
@@ -157,6 +157,28 @@ pub struct ExploreInput {
         description = "Restrict to a specific library by name. Use list_libraries to see available names. Omit to explore all indexed documents."
     )]
     pub library: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct FindPathsInput {
+    #[schemars(
+        description = "Keywords to substring-match against the file path. Multiple keywords are OR-ed — pass cross-language or spelling variants in one call to maximise recall (e.g. [\"WeChat\", \"微信\"], [\"WeChat\", \"wxid\", \"xinWeChat\"]). Case-insensitive for ASCII; CJK matches literally."
+    )]
+    pub patterns: Vec<String>,
+
+    #[serde(default)]
+    #[schemars(
+        description = "Restrict to a specific library by name (use list_libraries to see available libraries). Omit to search all indexed documents."
+    )]
+    pub library: Option<String>,
+
+    #[serde(default)]
+    #[schemars(description = "Maximum number of folder candidates to return (default 10, max 50)")]
+    pub limit: Option<u32>,
+
+    #[serde(default)]
+    #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
+    pub output_format: Option<String>,
 }
 
 // ── Tool implementations ────────────────────────────────
@@ -200,8 +222,28 @@ impl StdioBridgeHandler {
     }
 
     #[tool(
+        name = "find_paths",
+        description = "Locate folder paths in indexed documents by fuzzy keyword match on the directory part of the file path. Returns top folder candidates ordered by file count — pass a distinctive segment of any returned path back to `search` as `path_glob` (substring-matched, so `*xinWeChat*` works as well as a full prefix). Call BEFORE `search` when the user names a container with a fuzzy or cross-language word (\"in my WeChat\", \"Notion notes\") and the on-disk path is unknown. Pass multiple variants in `patterns` in one call (e.g. [\"WeChat\", \"微信\", \"wxid\"]) — patterns are OR-ed and substring-matched. Optional `library` scopes to one library; `limit` caps candidates (default 10, max 50). Skip this tool for pure content queries or file-type filters — call `search` directly."
+    )]
+    async fn find_paths(
+        &self,
+        Parameters(input): Parameters<FindPathsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let args = serde_json::to_value(&input)
+            .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
+
+        let content = self
+            .client
+            .call_tool("find_paths", args, &self.conn)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
+    #[tool(
         name = "search",
-        description = "[Workflow: search → grep or outline → read] Search indexed local documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets. After finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest. Use 'library' parameter to restrict search to a specific library (see list_libraries)."
+        description = "[Workflow: search → grep or outline → read] Search indexed local documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets. After finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest. Use 'library' parameter to restrict search to a specific library (see list_libraries). When the user names a container by a fuzzy or cross-language word (\"WeChat\", \"Notion notes\"), call `find_paths` first to discover what `path_glob` to pass."
     )]
     async fn search(
         &self,
@@ -291,12 +333,13 @@ impl ServerHandler for StdioBridgeHandler {
             },
             instructions: Some(
                 "Linkly AI — full-text search, document overview, and reading service for the user's local computer.\n\
-                 Workflow: list_libraries → search → grep or outline → read\n\
+                 Workflow: (find_paths →) search → grep or outline → read\n\
                  1. Use 'list_libraries' to discover available knowledge libraries\n\
-                 2. Use 'search' to find relevant documents (supports library and path_glob filtering)\n\
-                 3. Use 'outline' to get document metadata and structural outlines in batch\n\
-                 4. Use 'grep' to find specific text patterns (regex) within documents\n\
-                 5. Use 'read' to read document content with line-based pagination (offset/limit)\n\
+                 2. Use 'find_paths' BEFORE search when the user names a container by a fuzzy or cross-language word (\"WeChat\", \"Notion notes\") and the actual disk path is unknown — feed a distinctive segment of the result into search.path_glob\n\
+                 3. Use 'search' to find relevant documents (supports library and path_glob filtering)\n\
+                 4. Use 'outline' to get document metadata and structural outlines in batch\n\
+                 5. Use 'grep' to find specific text patterns (regex) within documents\n\
+                 6. Use 'read' to read document content with line-based pagination (offset/limit)\n\
                  \n\
                  Decision guide:\n\
                  - Always search first. Never fabricate document IDs.\n\

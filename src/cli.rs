@@ -49,6 +49,25 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
+    /// Locate folder paths by fuzzy keyword match (precursor to `search` when the actual path is unknown)
+    FindPaths {
+        /// Keywords to substring-match against file paths (comma-separated, OR semantics).
+        /// Pass cross-language or spelling variants in one call, e.g. "WeChat,微信,wxid"
+        #[arg(long, value_delimiter = ',', required = true)]
+        patterns: Vec<String>,
+
+        /// Restrict to a specific library by name
+        #[arg(long)]
+        library: Option<String>,
+
+        /// Maximum number of folder candidates to return (default: 10, max: 50)
+        #[arg(long)]
+        limit: Option<u32>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
     /// Search indexed local documents by keywords
     Search {
         /// Search query

@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod doctor;
 pub mod explore;
+pub mod find_paths;
 pub mod grep;
 pub mod list_libraries;
 pub mod mcp;
