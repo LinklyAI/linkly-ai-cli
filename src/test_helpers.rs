@@ -1,7 +1,7 @@
-/// Shared test utilities for CLI tests
-///
-/// HOME env var is process-global, so all tests that override it
-/// must serialize through this single lock.
+//! Shared test utilities for CLI tests.
+//!
+//! HOME env var is process-global, so all tests that override it
+//! must serialize through this single lock.
 
 use std::sync::Mutex;
 
