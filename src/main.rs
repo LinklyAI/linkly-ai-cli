@@ -6,6 +6,7 @@ mod connection;
 mod constants;
 mod manifest;
 mod output;
+mod version_check;
 #[cfg(test)]
 mod test_helpers;
 

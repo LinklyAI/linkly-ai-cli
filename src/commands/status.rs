@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::connection::{ConnectionInfo, RemoteHealthResponse};
 use crate::output;
+use crate::version_check;
 
 /// Local desktop health response schema (GET /health)
 #[derive(Deserialize)]
@@ -66,9 +67,10 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     }
 
     let health: HealthResponse = resp.json().await?;
+    let version_gap = version_check::check_desktop_version(&health.version).err();
 
     if json_mode {
-        let obj = serde_json::json!({
+        let mut obj = serde_json::json!({
             "status": "success",
             "cli_version": env!("CARGO_PKG_VERSION"),
             "app_version": health.version,
@@ -76,6 +78,13 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             "doc_count": health.doc_count,
             "index_status": health.index_status,
         });
+        if let Some(ref gap) = version_gap {
+            obj["version_gap"] = serde_json::json!({
+                "actual": gap.actual,
+                "required": gap.required,
+                "missing_features": gap.missing_features,
+            });
+        }
         println!("{}", obj);
     } else {
         let index_display = match health.index_status.as_str() {
@@ -94,6 +103,20 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             env!("CARGO_PKG_VERSION")
         );
         println!("  {}  v{}", "App:".dimmed(), health.version);
+        if let Some(ref gap) = version_gap {
+            // Indented under "App:" so it reads as an annotation on the
+            // version line rather than a separate top-level field.
+            eprintln!(
+                "        {} older than v{}: missing {}.",
+                "⚠".yellow(),
+                gap.required,
+                gap.missing_features
+            );
+            eprintln!(
+                "          Update Desktop: open Settings → About → Check for Updates,"
+            );
+            eprintln!("          or download from https://linkly.ai");
+        }
         println!(
             "  {}  {}",
             "MCP:".dimmed(),

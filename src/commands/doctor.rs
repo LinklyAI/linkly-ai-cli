@@ -352,6 +352,46 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                 latency_ms: None,
                 advice: None,
             });
+
+            // Compatibility check is split out from the connectivity-focused
+            // App check so the user can tell "Desktop is reachable" apart
+            // from "Desktop has the features this CLI expects". A non-SemVer
+            // app version (dev build, …) makes `check_desktop_version` return
+            // Ok and we skip pushing a Version check entirely — false alarms
+            // would be more annoying than the missing reassurance.
+            match crate::version_check::check_desktop_version(&health.version) {
+                Ok(()) => {
+                    if semver::Version::parse(&health.version).is_ok() {
+                        checks.push(Check {
+                            name: "Version",
+                            ok: true,
+                            detail: format!(
+                                "Desktop v{} meets CLI requirements (≥ v{})",
+                                health.version,
+                                crate::version_check::MIN_DESKTOP_VERSION_FOR_FULL_FEATURES
+                                    .trim_end_matches("-beta.0")
+                            ),
+                            latency_ms: None,
+                            advice: None,
+                        });
+                    }
+                }
+                Err(gap) => {
+                    checks.push(Check {
+                        name: "Version",
+                        ok: false,
+                        detail: format!(
+                            "Desktop v{} is older than v{} (missing {})",
+                            gap.actual, gap.required, gap.missing_features
+                        ),
+                        latency_ms: None,
+                        advice: Some(format!(
+                            "Update Desktop to v{} or later. Open Linkly AI Desktop > Settings > About > Check for Updates,\n    or download the latest installer from https://linkly.ai.",
+                            gap.required
+                        )),
+                    });
+                }
+            }
         }
     }
 }
