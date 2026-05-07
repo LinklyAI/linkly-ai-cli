@@ -61,7 +61,7 @@ pub struct SearchInput {
     )]
     pub path_glob: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }
@@ -77,7 +77,7 @@ pub struct OutlineInput {
     )]
     pub expand: Option<Vec<String>>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }
@@ -126,7 +126,7 @@ pub struct GrepInput {
     )]
     pub fuzzy_whitespace: Option<bool>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }
@@ -144,7 +144,7 @@ pub struct ReadInput {
     #[schemars(description = "Number of lines to read (default: 200, max: 500)")]
     pub limit: Option<usize>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }
@@ -166,17 +166,21 @@ pub struct FindPathsInput {
     )]
     pub patterns: Vec<String>,
 
-    #[serde(default)]
+    // `Option::is_none` skip is critical: the desktop side now declares
+    // `output_format` and (for some tools) `library` as required `String` with
+    // serde defaults, so a forwarded `null` from the bridge fails to deserialize.
+    // Skipping `None` lets the desktop default kick in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "Restrict to a specific library by name (use list_libraries to see available libraries). Omit to search all indexed documents."
     )]
     pub library: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Maximum number of folder candidates to return (default 10, max 50)")]
     pub limit: Option<u32>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }
