@@ -89,6 +89,18 @@ pub enum Command {
         #[arg(long)]
         path_glob: Option<String>,
 
+        /// Inclusive lower bound on file modification time (ISO 8601 UTC). Bare date or RFC 3339, e.g. '2024-01-01' or '2024-01-01T00:00:00Z'.
+        #[arg(long)]
+        modified_after: Option<String>,
+
+        /// Inclusive upper bound on file modification time (ISO 8601 UTC). Same format as --modified-after.
+        #[arg(long)]
+        modified_before: Option<String>,
+
+        /// Reorder by modification time: 'newest' (most recent first) or 'oldest' (earliest first). Default keeps relevance order.
+        #[arg(long, value_parser = ["newest", "oldest"])]
+        time_sort: Option<String>,
+
         #[command(flatten)]
         conn: ConnectionArgs,
     },

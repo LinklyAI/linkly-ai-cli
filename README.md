@@ -79,14 +79,19 @@ linkly search "API design" --limit 5
 linkly search "notes" --type pdf,md,docx
 linkly search "attention" --library my-research
 linkly search "transformer" --path-glob "*.pdf"
+linkly search "quarterly report" --modified-after 2024-01-01 --modified-before 2024-12-31
+linkly search "weekly notes" --time-sort newest --limit 10
 ```
 
-| Option              | Description                                                                                                                                     |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--limit <N>`       | Maximum results (default: 20, max: 50)                                                                                                          |
-| `--type <types>`    | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`)                                                                         |
-| `--library <name>`  | Restrict search to a specific library by name                                                                                                   |
-| `--path-glob <pat>` | SQLite GLOB pattern to filter by file path. `*` matches any chars (including `/`), `?` matches one char (e.g. `*.pdf`, `*papers*`, `2024/*.md`). When the actual path is unknown, run `linkly find-paths` first to obtain it. |
+| Option                       | Description                                                                                                                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--limit <N>`                | Maximum results (default: 20, max: 50)                                                                                                                                                                                       |
+| `--type <types>`             | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`)                                                                                                                                                      |
+| `--library <name>`           | Restrict search to a specific library by name                                                                                                                                                                                |
+| `--path-glob <pat>`          | SQLite GLOB pattern to filter by file path. `*` matches any chars (including `/`), `?` matches one char (e.g. `*.pdf`, `*papers*`, `2024/*.md`). When the actual path is unknown, run `linkly find-paths` first to obtain it. |
+| `--modified-after <iso>`     | Inclusive lower bound on file modification time. Accepts a bare date (`2024-01-01`) or RFC 3339 (`2024-01-01T00:00:00Z`). UTC. Use for explicit windows like "after January 2024".                                           |
+| `--modified-before <iso>`    | Inclusive upper bound. Same format as `--modified-after`.                                                                                                                                                                    |
+| `--time-sort <mode>`         | Reorder by modification time: `newest` or `oldest`. Omit (default) to keep BM25 + vector relevance ordering. Use `newest` for "recent / latest" intent without a fixed window.                                               |
 
 ### View Document Outline
 

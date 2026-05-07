@@ -14,6 +14,9 @@ pub async fn run(
     doc_types: Option<Vec<String>>,
     library: Option<String>,
     path_glob: Option<String>,
+    modified_after: Option<String>,
+    modified_before: Option<String>,
+    time_sort: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     if query.trim().is_empty() {
@@ -63,6 +66,15 @@ pub async fn run(
     }
     if let Some(glob) = path_glob {
         args["path_glob"] = serde_json::json!(glob);
+    }
+    if let Some(after) = modified_after {
+        args["modified_after"] = serde_json::json!(after);
+    }
+    if let Some(before) = modified_before {
+        args["modified_before"] = serde_json::json!(before);
+    }
+    if let Some(sort) = time_sort {
+        args["time_sort"] = serde_json::json!(sort);
     }
     if json_mode {
         args["output_format"] = serde_json::json!("json");

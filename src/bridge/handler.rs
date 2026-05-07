@@ -62,6 +62,24 @@ pub struct SearchInput {
     pub path_glob: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Inclusive lower bound on file modification time. Accepts ISO 8601 UTC: a bare date (e.g. \"2024-01-01\", expanded to 00:00:00Z) or a full RFC 3339 datetime (e.g. \"2024-01-01T00:00:00Z\"). Use for explicit windows like \"after January 2024\". For \"recent / latest\" without a fixed window prefer time_sort=\"newest\". Read the current time from any tool response's `[meta] now=…` line / `_meta.now` field to derive relative dates."
+    )]
+    pub modified_after: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Inclusive upper bound on file modification time. Same format as modified_after (ISO 8601 UTC; bare date or RFC 3339)."
+    )]
+    pub modified_before: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Reorder the matched candidate set by modification time. \"default\" preserves hybrid relevance ordering; \"newest\" puts the most recently modified first; \"oldest\" puts the earliest first. Use \"newest\" for \"recent / latest\" intent without a fixed window."
+    )]
+    pub time_sort: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }

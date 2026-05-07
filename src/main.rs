@@ -87,12 +87,27 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             r#type,
             library,
             path_glob,
+            modified_after,
+            modified_before,
+            time_sort,
             conn,
         } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::search::run(&client, &conn, &query, limit, r#type, library, path_glob, json_mode)
-                .await
+            commands::search::run(
+                &client,
+                &conn,
+                &query,
+                limit,
+                r#type,
+                library,
+                path_glob,
+                modified_after,
+                modified_before,
+                time_sort,
+                json_mode,
+            )
+            .await
         }
         Command::Grep {
             pattern,
