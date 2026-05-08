@@ -33,8 +33,18 @@ impl StdioBridgeHandler {
 }
 
 // ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs ───
+//
+// Every struct must carry `#[serde(deny_unknown_fields)]` so a client typo
+// (e.g. `modifiedafter`) fails fast at the bridge instead of silently
+// being dropped during the `to_value` round-trip and never reaching the
+// desktop's matching `deny_unknown_fields` check.
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListLibrariesInput {}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchInput {
     #[schemars(description = "Search keywords or phrases")]
     pub query: String,
@@ -85,6 +95,7 @@ pub struct SearchInput {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OutlineInput {
     #[schemars(description = "List of document IDs (obtained from search results)")]
     pub doc_ids: Vec<String>,
@@ -101,6 +112,7 @@ pub struct OutlineInput {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GrepInput {
     #[schemars(description = "Regular expression pattern to search for")]
     pub pattern: String,
@@ -150,6 +162,7 @@ pub struct GrepInput {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReadInput {
     #[schemars(description = "Document ID (obtained from search results)")]
     pub doc_id: String,
@@ -169,6 +182,7 @@ pub struct ReadInput {
 
 // SYNC: ExploreInput must match desktop's src/mcp/schemas.rs::ExploreInput
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExploreInput {
     #[serde(default)]
     #[schemars(
@@ -178,6 +192,7 @@ pub struct ExploreInput {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FindPathsInput {
     #[schemars(
         description = "Keywords to substring-match against the file path. Multiple keywords are OR-ed — pass cross-language or spelling variants in one call to maximise recall (e.g. [\"WeChat\", \"微信\"], [\"WeChat\", \"wxid\", \"xinWeChat\"]). Case-insensitive for ASCII; CJK matches literally."
@@ -211,7 +226,10 @@ impl StdioBridgeHandler {
         name = "list_libraries",
         description = "List all available knowledge libraries with descriptions and document counts. Use this to discover libraries before searching within a specific one."
     )]
-    async fn list_libraries(&self) -> Result<CallToolResult, McpError> {
+    async fn list_libraries(
+        &self,
+        Parameters(_input): Parameters<ListLibrariesInput>,
+    ) -> Result<CallToolResult, McpError> {
         let args = serde_json::json!({});
 
         let content = self
@@ -376,5 +394,29 @@ impl ServerHandler for StdioBridgeHandler {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // C-32: a typo like `modifiedafter` (missing underscore) used to be
+    // silently dropped during the bridge `to_value` round-trip and never
+    // reached the desktop's matching `deny_unknown_fields` check, leaving
+    // the user with a query that quietly ignored the filter.
+    #[test]
+    fn search_input_rejects_unknown_field() {
+        let json = serde_json::json!({
+            "query": "x",
+            "modifiedafter": "2024-01-01"
+        });
+        assert!(serde_json::from_value::<SearchInput>(json).is_err());
+    }
+
+    #[test]
+    fn list_libraries_input_rejects_unknown_field() {
+        let json = serde_json::json!({ "foo": 1 });
+        assert!(serde_json::from_value::<ListLibrariesInput>(json).is_err());
     }
 }
