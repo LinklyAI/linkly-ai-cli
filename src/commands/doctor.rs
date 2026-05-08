@@ -75,7 +75,9 @@ pub async fn run_from_args(args: &ConnectionArgs, json_mode: bool) -> Result<()>
             } else {
                 print_human(&checks);
             }
-            Ok(())
+            // Connection resolution failed — main.rs should exit non-zero.
+            // Empty message because the printed checks already explained.
+            anyhow::bail!("")
         }
     }
 }
@@ -91,6 +93,20 @@ pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         print_json(&checks, conn);
     } else {
         print_human(&checks);
+    }
+
+    // Reflect failures in the process exit code. The "Version" check is
+    // informational — it reports an outdated Desktop without blocking
+    // the rest of the diagnostics — so we only fail when one of the
+    // hard checks (connectivity, MCP handshake, etc.) is not ok.
+    let hard_failures = checks
+        .iter()
+        .filter(|c| !c.ok && c.name != "Version")
+        .count();
+    if hard_failures > 0 {
+        // Empty message: human/JSON output already printed the per-check
+        // detail. main.rs suppresses re-printing for empty errors.
+        anyhow::bail!("");
     }
 
     Ok(())

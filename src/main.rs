@@ -37,7 +37,14 @@ async fn main() {
     }
 
     if let Err(e) = result {
-        eprintln!("Error: {:#}", e);
+        // `output::print_error` returns an empty-message Err after
+        // already displaying the user-visible text; suppress our own
+        // "Error: …" line in that case to avoid the duplicate. Any
+        // other error reaches us with a real message and gets printed.
+        let msg = format!("{:#}", e);
+        if !msg.is_empty() {
+            eprintln!("Error: {}", msg);
+        }
         std::process::exit(1);
     }
 }

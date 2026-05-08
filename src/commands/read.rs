@@ -26,7 +26,7 @@ pub async fn run(
 
     match client.call_tool("read", args, conn).await {
         Ok(content) => output::print_result(&content, json_mode),
-        Err(e) => output::print_error(&e.to_string(), json_mode),
+        Err(e) => return output::print_error(&e.to_string(), json_mode),
     }
 
     Ok(())

@@ -20,13 +20,11 @@ pub async fn run(
     json_mode: bool,
 ) -> Result<()> {
     if query.trim().is_empty() {
-        output::print_error("Search query cannot be empty", json_mode);
-        return Ok(());
+        return output::print_error("Search query cannot be empty", json_mode);
     }
 
     if let Some(0) = limit {
-        output::print_error("--limit must be at least 1", json_mode);
-        return Ok(());
+        return output::print_error("--limit must be at least 1", json_mode);
     }
 
     // Normalize doc types to lowercase and validate against whitelist
@@ -38,7 +36,7 @@ pub async fn run(
             .map(|t| t.as_str())
             .collect();
         if !invalid.is_empty() {
-            output::print_error(
+            return output::print_error(
                 &format!(
                     "Unknown document type(s): {}. Supported: {}",
                     invalid.join(", "),
@@ -46,7 +44,6 @@ pub async fn run(
                 ),
                 json_mode,
             );
-            return Ok(());
         }
         Some(normalized)
     } else {
@@ -82,7 +79,7 @@ pub async fn run(
 
     match client.call_tool("search", args, conn).await {
         Ok(content) => output::print_result(&content, json_mode),
-        Err(e) => output::print_error(&e.to_string(), json_mode),
+        Err(e) => return output::print_error(&e.to_string(), json_mode),
     }
 
     Ok(())

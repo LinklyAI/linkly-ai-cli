@@ -23,8 +23,17 @@ pub fn print_result(content: &str, json_mode: bool) {
     }
 }
 
-/// Print an error message.
-pub fn print_error(msg: &str, json_mode: bool) {
+/// Print an error message and return an `Err` so callers can propagate
+/// it via `return print_error(...)` or `?`.
+///
+/// The returned error carries an empty message because the user-visible
+/// text has already been displayed by this function — `main.rs` checks
+/// for the empty string and skips its own `Error: …` re-print to avoid
+/// the duplicate. Without this propagation, a CLI command that hit a
+/// validation failure would print the error and then exit 0, breaking
+/// shell pipelines like `linkly search "" && deploy` and CI scripts
+/// that key off `$?`.
+pub fn print_error(msg: &str, json_mode: bool) -> anyhow::Result<()> {
     if json_mode {
         let envelope = serde_json::json!({
             "status": "error",
@@ -34,4 +43,5 @@ pub fn print_error(msg: &str, json_mode: bool) {
     } else {
         eprintln!("Error: {}", msg);
     }
+    Err(anyhow::Error::msg(""))
 }

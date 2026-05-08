@@ -36,15 +36,15 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         Ok(r) => r,
         Err(_) => {
             if json_mode {
-                output::print_error("App not running", json_mode);
+                return output::print_error("App not running", json_mode);
             } else {
                 eprintln!(
                     "{}\n  {}  Not running",
                     "Linkly AI Status".bold(),
                     "App:".dimmed()
                 );
+                anyhow::bail!("");
             }
-            return Ok(());
         }
     };
 
@@ -70,8 +70,14 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let version_gap = version_check::check_desktop_version(&health.version).err();
 
     if json_mode {
+        // When the Desktop is older than this CLI requires, surface the
+        // mismatch in `status` so a CI script keying off the JSON envelope
+        // (`jq -e '.status == "success"'`) treats the run as a warning
+        // rather than a clean pass — the connection is fine, but the
+        // capability surface is incomplete.
+        let envelope_status = if version_gap.is_some() { "warning" } else { "success" };
         let mut obj = serde_json::json!({
-            "status": "success",
+            "status": envelope_status,
             "cli_version": env!("CARGO_PKG_VERSION"),
             "app_version": health.version,
             "mcp_endpoint": health.mcp_endpoint,
@@ -153,15 +159,15 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         Ok(r) => r,
         Err(_) => {
             if json_mode {
-                output::print_error("Remote server unreachable", json_mode);
+                return output::print_error("Remote server unreachable", json_mode);
             } else {
                 eprintln!(
                     "{}\n  {}  Unreachable",
                     "Linkly AI Remote Status".bold(),
                     "Server:".dimmed()
                 );
+                anyhow::bail!("");
             }
-            return Ok(());
         }
     };
 
@@ -172,7 +178,7 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             status_code
         );
         if json_mode {
-            output::print_error(&msg, json_mode);
+            return output::print_error(&msg, json_mode);
         } else {
             eprintln!(
                 "{}\n  {}  {}",
@@ -180,8 +186,8 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
                 "Auth:".dimmed(),
                 msg
             );
+            anyhow::bail!("");
         }
-        return Ok(());
     }
     if !(200..300).contains(&status_code) {
         let body = resp.text().await.unwrap_or_default();
