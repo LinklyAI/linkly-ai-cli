@@ -32,7 +32,7 @@ impl StdioBridgeHandler {
     }
 }
 
-// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs ───
+// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs (the file lands on main once the v0.4.1 feat branch merges) ───
 //
 // Every struct must carry `#[serde(deny_unknown_fields)]` so a client typo
 // (e.g. `modifiedafter`) fails fast at the bridge instead of silently
@@ -67,7 +67,7 @@ pub struct SearchInput {
 
     #[serde(default)]
     #[schemars(
-        description = "Glob pattern to filter by file path. Examples: '*.pdf' for all PDFs, '*papers*' for paths containing papers. When the user names a folder/container by a fuzzy or cross-language word and the actual path is unknown, call `find_paths` first and use a distinctive segment of the returned path here."
+        description = "SQLite GLOB pattern to filter by file path. Syntax: * matches any characters (including /), ? matches exactly one character, [...] matches a character class. Note: always case-sensitive. Examples: '*.pdf' for all PDFs, '*papers*' for paths containing 'papers', '2024/*.md' for Markdown files under 2024/. When the user names a specific folder/container by a fuzzy or cross-language word and the actual path is unknown, call `find_paths` first and use a distinctive segment of the returned path here."
     )]
     pub path_glob: Option<String>,
 
@@ -180,7 +180,7 @@ pub struct ReadInput {
     pub output_format: Option<String>,
 }
 
-// SYNC: ExploreInput must match desktop's src/mcp/schemas.rs::ExploreInput
+// SYNC: ExploreInput must match desktop's src/mcp/schemas.rs::ExploreInput (the file lands on main once the v0.4.1 feat branch merges)
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExploreInput {

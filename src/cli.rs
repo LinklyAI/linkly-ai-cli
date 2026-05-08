@@ -97,8 +97,8 @@ pub enum Command {
         #[arg(long)]
         modified_before: Option<String>,
 
-        /// Reorder by modification time: 'newest' (most recent first) or 'oldest' (earliest first). Default keeps relevance order.
-        #[arg(long, value_parser = ["newest", "oldest"])]
+        /// Reorder by modification time: 'newest' (most recent first), 'oldest' (earliest first), or 'default' (no reorder, equivalent to omitting the flag). The desktop schema's default is also 'default', so this keeps the three-layer contract aligned.
+        #[arg(long, value_parser = ["default", "newest", "oldest"])]
         time_sort: Option<String>,
 
         #[command(flatten)]

@@ -64,9 +64,13 @@ pub fn check_desktop_version(version: &str) -> Result<(), VersionGap> {
         .expect("MIN_DESKTOP_VERSION_FOR_FULL_FEATURES is a valid SemVer literal");
 
     if actual < required {
+        // Strip the synthetic `-beta.0` floor so users see the public
+        // version label (`0.4.1`) instead of the internal sentinel.
+        let required_label =
+            MIN_DESKTOP_VERSION_FOR_FULL_FEATURES.trim_end_matches("-beta.0");
         Err(VersionGap {
             actual: version.to_string(),
-            required: "0.4.1",
+            required: required_label,
             missing_features: FEATURES_REQUIRING_MIN_DESKTOP,
         })
     } else {

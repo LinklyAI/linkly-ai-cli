@@ -214,7 +214,7 @@ linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_la
 
 ## Options
 
-Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `grep`, `outline`, `read`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
+Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
 
 | Flag               | Scope  | Description                                                                                       |
 | ------------------ | ------ | ------------------------------------------------------------------------------------------------- |

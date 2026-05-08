@@ -105,17 +105,20 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         println!("  {}  v{}", "App:".dimmed(), health.version);
         if let Some(ref gap) = version_gap {
             // Indented under "App:" so it reads as an annotation on the
-            // version line rather than a separate top-level field.
-            eprintln!(
+            // version line rather than a separate top-level field. Stays on
+            // stdout (alongside the rest of the human-readable status block)
+            // so a redirect like `linkly status > out.txt` keeps the warning
+            // visible — we used to emit on stderr but that splits the report.
+            println!(
                 "        {} older than v{}: missing {}.",
                 "⚠".yellow(),
                 gap.required,
                 gap.missing_features
             );
-            eprintln!(
+            println!(
                 "          Update Desktop: open Settings → About → Check for Updates,"
             );
-            eprintln!("          or download from https://linkly.ai");
+            println!("          or download from https://linkly.ai");
         }
         println!(
             "  {}  {}",
