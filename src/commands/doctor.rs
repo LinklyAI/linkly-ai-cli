@@ -129,6 +129,17 @@ async fn run_local(conn: &ConnectionInfo) -> Vec<Check> {
     // 2. HTTP connectivity + 3. App status
     run_health_check(&mut checks, conn, false).await;
 
+    // 4. MCP round-trip — Desktop's HTTP /health endpoint can be alive
+    // while the MCP server is broken (initialize handshake hangs, tools/list
+    // fails, transport mismatch). Without this check `linkly doctor` would
+    // report "all green" yet every subsequent tool call fails. Mirrors the
+    // remote-mode flow so all three connection modes have the same
+    // diagnostic depth.
+    let all_ok = checks.iter().all(|c| c.ok);
+    if all_ok {
+        run_mcp_roundtrip(&mut checks, conn).await;
+    }
+
     checks
 }
 
@@ -139,6 +150,12 @@ async fn run_lan(conn: &ConnectionInfo) -> Vec<Check> {
 
     // 1. HTTP connectivity + 2. Auth + 3. App status
     run_health_check(&mut checks, conn, false).await;
+
+    // 4. MCP round-trip (same rationale as `run_local`).
+    let all_ok = checks.iter().all(|c| c.ok);
+    if all_ok {
+        run_mcp_roundtrip(&mut checks, conn).await;
+    }
 
     checks
 }
@@ -521,7 +538,29 @@ fn print_json(checks: &[Check], conn: &ConnectionInfo) {
         ConnectionMode::Remote => "remote",
     };
 
-    let issues = checks.iter().filter(|c| !c.ok).count();
+    // Split failed checks into hard failures and warnings. The "Version"
+    // check is informational only — an outdated Desktop is a real concern
+    // but doesn't block diagnostics from running, and `run()` deliberately
+    // keeps it out of the exit-code calculation. The JSON envelope must
+    // use the same partition so a CI script that keys off `.status` and
+    // one that keys off `$?` reach the same conclusion.
+    let hard_failures = checks
+        .iter()
+        .filter(|c| !c.ok && c.name != "Version")
+        .count();
+    let warnings = checks
+        .iter()
+        .filter(|c| !c.ok && c.name == "Version")
+        .count();
+    let total_issues = hard_failures + warnings;
+
+    let envelope_status = if hard_failures > 0 {
+        "error"
+    } else if warnings > 0 {
+        "warning"
+    } else {
+        "ok"
+    };
 
     let checks_json: Vec<serde_json::Value> = checks
         .iter()
@@ -550,10 +589,12 @@ fn print_json(checks: &[Check], conn: &ConnectionInfo) {
         .join("\n");
 
     let output = serde_json::json!({
-        "status": if issues == 0 { "ok" } else { "error" },
+        "status": envelope_status,
         "mode": mode,
         "checks": checks_json,
-        "issues": issues,
+        "issues": total_issues,
+        "hard_failures": hard_failures,
+        "warnings": warnings,
         "advice": if advice.is_empty() { serde_json::Value::Null } else { serde_json::json!(advice) },
     });
 

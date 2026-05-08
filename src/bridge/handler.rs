@@ -39,6 +39,13 @@ impl StdioBridgeHandler {
 // being dropped during the `to_value` round-trip and never reaching the
 // desktop's matching `deny_unknown_fields` check.
 
+/// Default value for `time_sort`. Mirrors desktop schemas.rs::default_time_sort.
+/// "default" preserves the tool's native ordering (hybrid BM25 + vector
+/// relevance for search). The other accepted values are "newest" and "oldest".
+fn default_time_sort() -> String {
+    "default".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListLibrariesInput {}
@@ -83,11 +90,20 @@ pub struct SearchInput {
     )]
     pub modified_before: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Mirror desktop's `time_sort: String + #[serde(default)]` shape rather
+    // than `Option<String>`. Both implementations accept "default" / "newest"
+    // / "oldest"; the alignment matters because schemars derives the JSON
+    // Schema exposed to upstream MCP clients (Claude Desktop / Cursor / …)
+    // and we don't want CLI-bridged clients to see a different schema (with
+    // type ["string", "null"] and no documented default) than direct-MCP
+    // clients (which see "string" with default "default"). C-9 already
+    // taught CLI's --time-sort to accept "default" so the three layers
+    // are now contract-aligned.
+    #[serde(default = "default_time_sort")]
     #[schemars(
         description = "Reorder the matched candidate set by modification time. \"default\" preserves hybrid relevance ordering; \"newest\" puts the most recently modified first; \"oldest\" puts the earliest first. Use \"newest\" for \"recent / latest\" intent without a fixed window."
     )]
-    pub time_sort: Option<String>,
+    pub time_sort: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]

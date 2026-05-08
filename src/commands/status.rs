@@ -202,8 +202,18 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let tunnel_status = health.tunnel.as_deref().unwrap_or("unknown");
 
     if json_mode {
+        // Mirror the local-mode "warning vs success" envelope from C-14: a
+        // disconnected tunnel means the upstream Desktop is unreachable
+        // through this remote endpoint, which a CI script keying off the
+        // JSON `status` field needs to treat as not-okay even though the
+        // tunnel host itself responded.
+        let envelope_status = if tunnel_status == "connected" {
+            "success"
+        } else {
+            "warning"
+        };
         let obj = serde_json::json!({
-            "status": "success",
+            "status": envelope_status,
             "mode": "remote",
             "cli_version": env!("CARGO_PKG_VERSION"),
             "server_status": health.status,
