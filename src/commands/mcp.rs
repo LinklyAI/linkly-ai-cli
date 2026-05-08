@@ -27,8 +27,19 @@ pub async fn run(endpoint: Option<&str>) -> Result<()> {
     let stdio = (tokio::io::stdin(), tokio::io::stdout());
     let service = handler.serve(stdio).await?;
 
-    // Block until the client disconnects
-    service.waiting().await?;
+    // Block until either the client disconnects or the user sends Ctrl+C.
+    // Without the signal arm the bridge would still terminate on SIGINT
+    // (tokio's default), but it would skip our own shutdown path —
+    // explicit handling lets us return cleanly so a parent shell sees
+    // exit 0 instead of an aborted process.
+    tokio::select! {
+        result = service.waiting() => {
+            result?;
+        }
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("linkly mcp: received Ctrl+C, shutting down.");
+        }
+    }
 
     Ok(())
 }

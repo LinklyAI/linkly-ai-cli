@@ -21,8 +21,11 @@ async fn main() {
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
 
-    // Write installed manifest (best-effort, local I/O < 1ms)
-    manifest::write_manifest();
+    // Write installed manifest off the async runtime — even though the
+    // I/O is tiny, blocking the executor for synchronous filesystem
+    // calls is the wrong shape for an async main and would stall any
+    // concurrent background task (e.g. the update check above).
+    let _ = tokio::task::spawn_blocking(manifest::write_manifest).await;
 
     let result = run(cli).await;
 

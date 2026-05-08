@@ -79,7 +79,16 @@ pub async fn check_silently() -> Option<String> {
 }
 
 async fn fetch_latest() -> Result<LatestInfo> {
-    let resp = reqwest::get(LATEST_URL)
+    // Bound the request — without a timeout `reqwest::get` will hang
+    // indefinitely if the updater host is unreachable, blocking the
+    // background spawn that main.rs waits on at exit.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .context("Failed to build HTTP client")?;
+    let resp = client
+        .get(LATEST_URL)
+        .send()
         .await
         .context("Failed to check for updates")?
         .error_for_status()
