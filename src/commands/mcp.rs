@@ -16,8 +16,11 @@ use crate::connection;
 pub async fn run(endpoint: Option<&str>) -> Result<()> {
     let conn = connection::resolve(endpoint, None, false)?;
 
-    // Connect to the desktop app's MCP server
-    let client = McpClient::connect(&conn).await?;
+    // Connect to the desktop app's MCP server. The bridge is a transparent
+    // passthrough — skip the version gate so an old Desktop's "tool not
+    // found" surfaces verbatim to whatever upstream client (e.g. Claude
+    // Desktop) is using us, instead of being intercepted on the way in.
+    let client = McpClient::connect_passthrough(&conn).await?;
 
     // Create the bridge handler and serve over stdio
     let handler = StdioBridgeHandler::new(client, conn);

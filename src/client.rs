@@ -8,6 +8,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use crate::connection::{ConnectionInfo, ConnectionMode, RemoteHealthResponse};
+use crate::version_check::check_desktop_version;
 
 /// Timeout for MCP session initialization (serve / initialize handshake).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,9 +40,26 @@ pub struct McpClient {
 
 impl McpClient {
     /// Connect to the MCP server. Performs a pre-flight health check to
-    /// provide clear error messages for auth/network failures.
+    /// provide clear error messages for auth/network failures, and gates
+    /// against an outdated Desktop on the other end so users don't hit
+    /// confusing per-tool errors when the CLI uses surface area the
+    /// Desktop doesn't yet expose.
     pub async fn connect(conn: &ConnectionInfo) -> Result<Self> {
-        preflight_check(conn).await?;
+        Self::connect_inner(conn, true).await
+    }
+
+    /// Connect without version gating. Used by the `linkly mcp` stdio
+    /// bridge: there the bridge is a transparent passthrough — its job
+    /// is to forward whatever the upstream client sends to whatever
+    /// Desktop happens to be on the other end. A Desktop-too-old
+    /// failure surfaces naturally as a per-tool "tool not found" error
+    /// to the upstream client, which is an informative outcome.
+    pub async fn connect_passthrough(conn: &ConnectionInfo) -> Result<Self> {
+        Self::connect_inner(conn, false).await
+    }
+
+    async fn connect_inner(conn: &ConnectionInfo, check_version: bool) -> Result<Self> {
+        preflight_check(conn, check_version).await?;
 
         let mut config = StreamableHttpClientTransportConfig::with_uri(&*conn.mcp_url);
         if let Some(header) = &conn.auth_header {
@@ -117,10 +135,24 @@ impl McpClient {
     }
 }
 
+/// Minimal /health body shape used to extract the Desktop version. The
+/// real /health response carries more fields; we only deserialize what
+/// we need here (matching the more detailed `HealthResponse` struct in
+/// `commands/status.rs`).
+#[derive(serde::Deserialize)]
+struct VersionProbe {
+    version: Option<String>,
+}
+
 /// Pre-flight health check: verifies connectivity and auth before establishing the MCP session.
 /// Local mode: GET /health (desktop app health endpoint)
 /// Remote mode: GET /mcp/health (tunnel health endpoint, requires auth) — also checks tunnel status
-async fn preflight_check(conn: &ConnectionInfo) -> Result<()> {
+///
+/// When `check_version` is true the local-mode 200 branch additionally parses the
+/// reported Desktop version and refuses to proceed if the Desktop is older than
+/// what this CLI knows how to talk to. Remote mode skips the version check
+/// because /mcp/health doesn't surface the upstream Desktop version.
+async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<()> {
     let health_url = if conn.is_remote {
         format!("{}/mcp/health", conn.base_url)
     } else {
@@ -160,9 +192,10 @@ async fn preflight_check(conn: &ConnectionInfo) -> Result<()> {
 
     match resp.status().as_u16() {
         200..=299 => {
-            // Remote mode: also check tunnel status
+            let body = resp.text().await.unwrap_or_default();
+
+            // Remote mode: also check tunnel status (no version field on this body).
             if conn.is_remote {
-                let body = resp.text().await.unwrap_or_default();
                 if let Ok(health) = serde_json::from_str::<RemoteHealthResponse>(&body) {
                     if health.tunnel.as_deref() == Some("disconnected") {
                         bail!(
@@ -173,7 +206,32 @@ async fn preflight_check(conn: &ConnectionInfo) -> Result<()> {
                         );
                     }
                 }
+                return Ok(());
             }
+
+            // Local / LAN mode: gate against an outdated Desktop. We can't do this
+            // for remote mode because the tunnel /mcp/health body doesn't carry
+            // the upstream Desktop version.
+            if check_version {
+                if let Ok(probe) = serde_json::from_str::<VersionProbe>(&body) {
+                    if let Some(version) = probe.version.as_deref() {
+                        if let Err(gap) = check_desktop_version(version) {
+                            bail!(
+                                "Linkly AI Desktop v{} is older than v{}, which this CLI \
+                                 (v{}) requires for {}.\n\
+                                 Update Desktop: open Settings → About → Check for Updates, \
+                                 or download from https://linkly.ai\n\n{}",
+                                gap.actual,
+                                gap.required,
+                                env!("CARGO_PKG_VERSION"),
+                                gap.missing_features,
+                                hint
+                            );
+                        }
+                    }
+                }
+            }
+
             Ok(())
         }
         401 => {
