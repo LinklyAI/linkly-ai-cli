@@ -14,10 +14,13 @@ pub async fn run(
     if let Some(lib) = library {
         args["library"] = serde_json::json!(lib);
     }
+    if json_mode {
+        args["output_format"] = serde_json::json!("json");
+    }
 
     match client.call_tool("explore", args, conn).await {
         Ok(content) => output::print_result(&content, json_mode),
-        Err(e) => return output::print_error(&e.to_string(), json_mode),
+        Err(e) => return output::print_tool_error(&e, json_mode),
     }
 
     Ok(())

@@ -10,7 +10,7 @@ pub async fn run(client: &McpClient, conn: &ConnectionInfo, json_mode: bool) -> 
         .await
     {
         Ok(content) => output::print_result(&content, json_mode),
-        Err(e) => return output::print_error(&e.to_string(), json_mode),
+        Err(e) => return output::print_tool_error(&e, json_mode),
     }
 
     Ok(())

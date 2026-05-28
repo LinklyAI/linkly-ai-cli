@@ -152,10 +152,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Command::Outline { ids, conn } => {
+        Command::Outline { ids, expand, conn } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::outline::run(&client, &conn, &ids, json_mode).await
+            commands::outline::run(&client, &conn, &ids, expand, json_mode).await
         }
         Command::Read {
             id,

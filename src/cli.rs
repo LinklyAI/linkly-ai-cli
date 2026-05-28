@@ -41,7 +41,7 @@ pub enum Command {
 
     /// Get a bird's-eye overview of all documents or a specific library
     Explore {
-        /// Restrict to a specific library by name
+        /// Restrict to a specific library. Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>
         #[arg(long)]
         library: Option<String>,
 
@@ -56,7 +56,7 @@ pub enum Command {
         #[arg(long, value_delimiter = ',', required = true)]
         patterns: Vec<String>,
 
-        /// Restrict to a specific library by name
+        /// Restrict to a specific library. Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>
         #[arg(long)]
         library: Option<String>,
 
@@ -81,7 +81,7 @@ pub enum Command {
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
 
-        /// Restrict search to a specific library by name
+        /// Restrict search to a specific library. Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>
         #[arg(long)]
         library: Option<String>,
 
@@ -154,6 +154,10 @@ pub enum Command {
         /// Document IDs (from search results)
         #[arg(required = true)]
         ids: Vec<String>,
+
+        /// Node IDs to expand, e.g. "2,3.1" (comma-separated). Others collapse; omit to auto-fit.
+        #[arg(long, value_delimiter = ',')]
+        expand: Option<Vec<String>>,
 
         #[command(flatten)]
         conn: ConnectionArgs,

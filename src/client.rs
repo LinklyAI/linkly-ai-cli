@@ -3,12 +3,46 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use rmcp::model::{CallToolRequestParams, ClientInfo, Content, Implementation, RawContent};
-use rmcp::service::RunningService;
+use rmcp::service::{RunningService, ServiceError};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
-use crate::connection::{ConnectionInfo, ConnectionMode, RemoteHealthResponse};
+use crate::connection::{ConnectionInfo, ConnectionMode};
 use crate::version_check::check_desktop_version;
+
+/// Structured JSON-RPC error returned by the gateway/server, carrying the
+/// `code` / `message` / `data` fields so `--json` output can surface the error
+/// code and the `data.guidance` the cloud gateway provides. Non-protocol
+/// failures (bad arguments, timeout, transport, tool-level `isError`) stay as
+/// plain `anyhow` errors and are rendered as strings by `print_tool_error`.
+#[derive(Debug)]
+pub struct ToolError {
+    pub code: i32,
+    pub message: String,
+    pub data: Option<serde_json::Value>,
+}
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)?;
+        if let Some(data) = &self.data {
+            write!(f, " ({})", data)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ToolError {}
+
+impl From<rmcp::model::ErrorData> for ToolError {
+    fn from(error: rmcp::model::ErrorData) -> Self {
+        ToolError {
+            code: error.code.0,
+            message: error.message.to_string(),
+            data: error.data,
+        }
+    }
+}
 
 /// Timeout for MCP session initialization (serve / initialize handshake).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -95,7 +129,7 @@ impl McpClient {
             _ => bail!("Arguments must be a JSON object"),
         };
 
-        let result = tokio::time::timeout(
+        let call_result = tokio::time::timeout(
             CALL_TOOL_TIMEOUT,
             self.service.call_tool(CallToolRequestParams {
                 meta: None,
@@ -111,7 +145,16 @@ impl McpClient {
                 CALL_TOOL_TIMEOUT.as_secs(),
                 conn.doctor_hint()
             )
-        })??;
+        })?;
+
+        // Preserve the gateway's structured JSON-RPC error (code + data.guidance)
+        // by wrapping it as ToolError; other transport/protocol errors keep their
+        // default rendering.
+        let result = match call_result {
+            Ok(result) => result,
+            Err(ServiceError::McpError(error)) => return Err(ToolError::from(error).into()),
+            Err(other) => return Err(other.into()),
+        };
 
         if result.is_error.unwrap_or(false) {
             let msg = extract_text(&result.content);
@@ -194,18 +237,13 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
         200..=299 => {
             let body = resp.text().await.unwrap_or_default();
 
-            // Remote mode: also check tunnel status (no version field on this body).
+            // Remote mode: tunnel status is NOT a hard gate here. The gateway
+            // serves cloud:// tool calls (and aggregates list_libraries) even
+            // when Desktop is offline; local/default calls receive a precise
+            // -32000 error from the gateway with reconnect guidance. Gating on
+            // tunnel status here would make cloud libraries unreachable whenever
+            // Desktop happens to be disconnected (the Cloud KB launch blocker).
             if conn.is_remote {
-                if let Ok(health) = serde_json::from_str::<RemoteHealthResponse>(&body) {
-                    if health.tunnel.as_deref() == Some("disconnected") {
-                        bail!(
-                            "Linkly AI Desktop is not connected.\n\
-                             Launch Desktop and enable \"MCP Connector\" in Settings > MCP.\n\n\
-                             {}",
-                            hint
-                        );
-                    }
-                }
                 return Ok(());
             }
 
@@ -281,4 +319,57 @@ fn extract_text(content: &[Content]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToolError;
+    use rmcp::model::{ErrorCode, ErrorData};
+
+    #[test]
+    fn tool_error_from_mcp_maps_all_fields() {
+        let mcp = ErrorData {
+            code: ErrorCode(-32602),
+            message: "Invalid params".into(),
+            data: Some(serde_json::json!({ "guidance": ["fix it"] })),
+        };
+        let err = ToolError::from(mcp);
+        assert_eq!(err.code, -32602);
+        assert_eq!(err.message, "Invalid params");
+        assert_eq!(err.data, Some(serde_json::json!({ "guidance": ["fix it"] })));
+    }
+
+    #[test]
+    fn tool_error_from_mcp_preserves_none_data() {
+        let mcp = ErrorData {
+            code: ErrorCode(-32000),
+            message: "Desktop unavailable".into(),
+            data: None,
+        };
+        let err = ToolError::from(mcp);
+        assert_eq!(err.code, -32000);
+        assert_eq!(err.data, None);
+    }
+
+    #[test]
+    fn tool_error_display_without_data() {
+        let err = ToolError {
+            code: -32000,
+            message: "Desktop unavailable".into(),
+            data: None,
+        };
+        assert_eq!(err.to_string(), "-32000: Desktop unavailable");
+    }
+
+    #[test]
+    fn tool_error_display_with_data() {
+        let err = ToolError {
+            code: -32602,
+            message: "Mixed".into(),
+            data: Some(serde_json::json!({ "reason": "x" })),
+        };
+        let rendered = err.to_string();
+        assert!(rendered.starts_with("-32602: Mixed ("), "got: {rendered}");
+        assert!(rendered.contains("reason"));
+    }
 }
