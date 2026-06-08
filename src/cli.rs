@@ -85,7 +85,7 @@ pub enum Command {
         #[arg(long)]
         library: Option<String>,
 
-        /// SQLite GLOB pattern to filter by file path. * matches any chars (including /), ? matches one char. Examples: '*.pdf', '*papers*'
+        /// Glob substring-matched against the file path (no leading/trailing * needed). * = any chars incl. /, ? = one char. Examples: '*.pdf', 'papers', '/abs/dir/'
         #[arg(long)]
         path_glob: Option<String>,
 

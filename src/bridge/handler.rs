@@ -74,7 +74,7 @@ pub struct SearchInput {
 
     #[serde(default)]
     #[schemars(
-        description = "SQLite GLOB pattern to filter by file path. Syntax: * matches any characters (including /), ? matches exactly one character, [...] matches a character class. Note: always case-sensitive. Examples: '*.pdf' for all PDFs, '*papers*' for paths containing 'papers', '2024/*.md' for Markdown files under 2024/. When the user names a specific folder/container by a fuzzy or cross-language word and the actual path is unknown, call `find_paths` first and use a distinctive segment of the returned path here."
+        description = "Glob pattern to filter by file path, matched as a SUBSTRING of the path — the pattern may appear anywhere, you do NOT need leading or trailing wildcards. Syntax: * matches any characters (including /), ? matches exactly one character, [...] matches a character class. Always case-sensitive. Examples: '*.pdf' for all PDFs, 'papers' for paths containing 'papers', '/Users/me/notes/' to scope to everything under that directory (a full absolute directory path works directly — keep the trailing '/'). When the user names a specific folder/container by a fuzzy or cross-language word and the actual path is unknown, call `find_paths` first and use a distinctive segment of the returned path here."
     )]
     pub path_glob: Option<String>,
 
