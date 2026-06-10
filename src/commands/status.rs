@@ -57,7 +57,11 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
                 "Authentication failed (401){}\n\
                  For LAN access: use --endpoint <url> --token <token>\n\
                  For remote access: run `linkly auth set-key <api-key>`",
-                if body_trimmed.is_empty() { String::new() } else { format!(": {}", body_trimmed) }
+                if body_trimmed.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", body_trimmed)
+                }
             );
         }
         if body_trimmed.is_empty() {
@@ -75,7 +79,11 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         // (`jq -e '.status == "success"'`) treats the run as a warning
         // rather than a clean pass — the connection is fine, but the
         // capability surface is incomplete.
-        let envelope_status = if version_gap.is_some() { "warning" } else { "success" };
+        let envelope_status = if version_gap.is_some() {
+            "warning"
+        } else {
+            "success"
+        };
         let mut obj = serde_json::json!({
             "status": envelope_status,
             "cli_version": env!("CARGO_PKG_VERSION"),
@@ -103,11 +111,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         };
 
         println!("{}", "Linkly AI Status".bold());
-        println!(
-            "  {}  v{}",
-            "CLI:".dimmed(),
-            env!("CARGO_PKG_VERSION")
-        );
+        println!("  {}  v{}", "CLI:".dimmed(), env!("CARGO_PKG_VERSION"));
         println!("  {}  v{}", "App:".dimmed(), health.version);
         if let Some(ref gap) = version_gap {
             // Indented under "App:" so it reads as an annotation on the
@@ -121,18 +125,13 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
                 gap.required,
                 gap.missing_features
             );
-            println!(
-                "          Update Desktop: open Settings → About → Check for Updates,"
-            );
+            println!("          Update Desktop: open Settings → About → Check for Updates,");
             println!("          or download from https://linkly.ai");
         }
         println!(
             "  {}  {}",
             "MCP:".dimmed(),
-            health
-                .mcp_endpoint
-                .as_deref()
-                .unwrap_or("not running")
+            health.mcp_endpoint.as_deref().unwrap_or("not running")
         );
         println!(
             "  {} {} indexed",
@@ -228,11 +227,7 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         };
 
         println!("{}", "Linkly AI Remote Status".bold());
-        println!(
-            "  {}  v{}",
-            "CLI:".dimmed(),
-            env!("CARGO_PKG_VERSION")
-        );
+        println!("  {}  v{}", "CLI:".dimmed(), env!("CARGO_PKG_VERSION"));
         println!("  {}  {}", "Server:".dimmed(), health.status);
         println!("  {}  {}", "Tunnel:".dimmed(), tunnel_display);
         println!("  {}  https://mcp.linkly.ai/mcp", "MCP:".dimmed());

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use owo_colors::OwoColorize;
 use serde::Deserialize;
 use std::io::Read;
@@ -15,10 +15,7 @@ struct LatestInfo {
 /// Run the self-update command interactively.
 pub async fn run() -> Result<()> {
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
-    println!(
-        "Current version: v{}",
-        env!("CARGO_PKG_VERSION").dimmed()
-    );
+    println!("Current version: v{}", env!("CARGO_PKG_VERSION").dimmed());
     println!("Checking for updates...");
 
     let info = fetch_latest().await?;
@@ -56,11 +53,7 @@ pub async fn run() -> Result<()> {
     let binary_path = extract_binary(&bytes, &tmp_dir, &platform_key)?;
     self_replace::self_replace(&binary_path)?;
 
-    println!(
-        "{} Updated to v{}",
-        "Success!".green().bold(),
-        latest
-    );
+    println!("{} Updated to v{}", "Success!".green().bold(), latest);
 
     Ok(())
 }

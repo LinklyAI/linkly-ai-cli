@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 /// Remote tunnel endpoint
@@ -82,7 +82,9 @@ pub fn resolve(
         let base = trimmed.strip_suffix("/mcp").unwrap_or(trimmed).to_string();
         let mcp = format!("{}/mcp", base);
         let auth_header = token.map(|t| format!("Bearer {}", t));
-        let mode = ConnectionMode::Lan { endpoint: base.clone() };
+        let mode = ConnectionMode::Lan {
+            endpoint: base.clone(),
+        };
         return Ok(ConnectionInfo {
             mcp_url: mcp,
             base_url: base,
@@ -94,14 +96,13 @@ pub fn resolve(
 
     // Mode 2: remote tunnel via mcp.linkly.ai
     if remote {
-        let api_key = read_credentials_api_key()?
-            .context(
-                "No API key configured for remote mode.\n\n\
+        let api_key = read_credentials_api_key()?.context(
+            "No API key configured for remote mode.\n\n\
                  To set up:\n  \
                    1. Get your API key from https://linkly.ai (Dashboard > API Keys)\n  \
                    2. Run: linkly auth set-key <your-api-key>\n\n\
                  Run 'linkly doctor --remote' to diagnose remote connection issues.",
-            )?;
+        )?;
 
         return Ok(ConnectionInfo {
             mcp_url: REMOTE_MCP_URL.to_string(),
@@ -132,12 +133,9 @@ pub fn resolve(
          Try restarting the app, or delete ~/.linkly/port and relaunch.\n\n\
          Run 'linkly doctor' to diagnose local connection issues.";
 
-    let parsed: serde_json::Value =
-        serde_json::from_str(&content).context(PORT_FILE_CORRUPT)?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).context(PORT_FILE_CORRUPT)?;
 
-    let port = parsed["port"]
-        .as_u64()
-        .context(PORT_FILE_CORRUPT)?;
+    let port = parsed["port"].as_u64().context(PORT_FILE_CORRUPT)?;
 
     if port == 0 || port > 65535 {
         bail!(
@@ -316,7 +314,10 @@ mod tests {
         with_temp_home("cred_roundtrip", |_home| {
             save_credentials_api_key("lkai_test_roundtrip_abcdef1234567890").unwrap();
             let read = read_credentials_api_key().unwrap();
-            assert_eq!(read, Some("lkai_test_roundtrip_abcdef1234567890".to_string()));
+            assert_eq!(
+                read,
+                Some("lkai_test_roundtrip_abcdef1234567890".to_string())
+            );
         });
     }
 
@@ -388,7 +389,14 @@ mod tests {
     fn clap_rejects_endpoint_and_remote_together() {
         use clap::Parser;
         let result = crate::cli::Cli::try_parse_from([
-            "linkly", "search", "test", "--endpoint", "http://x", "--token", "tk", "--remote",
+            "linkly",
+            "search",
+            "test",
+            "--endpoint",
+            "http://x",
+            "--token",
+            "tk",
+            "--remote",
         ]);
         assert!(result.is_err(), "--endpoint and --remote should conflict");
     }
@@ -396,18 +404,16 @@ mod tests {
     #[test]
     fn clap_rejects_token_without_endpoint() {
         use clap::Parser;
-        let result = crate::cli::Cli::try_parse_from([
-            "linkly", "search", "test", "--token", "abc",
-        ]);
+        let result =
+            crate::cli::Cli::try_parse_from(["linkly", "search", "test", "--token", "abc"]);
         assert!(result.is_err(), "--token requires --endpoint");
     }
 
     #[test]
     fn clap_rejects_endpoint_without_token() {
         use clap::Parser;
-        let result = crate::cli::Cli::try_parse_from([
-            "linkly", "search", "test", "--endpoint", "http://x",
-        ]);
+        let result =
+            crate::cli::Cli::try_parse_from(["linkly", "search", "test", "--endpoint", "http://x"]);
         assert!(result.is_err(), "--endpoint requires --token");
     }
 
@@ -415,7 +421,13 @@ mod tests {
     fn clap_accepts_endpoint_with_token() {
         use clap::Parser;
         let result = crate::cli::Cli::try_parse_from([
-            "linkly", "search", "test", "--endpoint", "http://x", "--token", "tk",
+            "linkly",
+            "search",
+            "test",
+            "--endpoint",
+            "http://x",
+            "--token",
+            "tk",
         ]);
         assert!(result.is_ok(), "--endpoint + --token should be accepted");
     }

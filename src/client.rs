@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use crate::connection::{ConnectionInfo, ConnectionMode};
+use crate::version_check::check_desktop_version;
+use anyhow::{bail, Result};
 use rmcp::model::{CallToolRequestParams, ClientInfo, Content, Implementation, RawContent};
 use rmcp::service::{RunningService, ServiceError};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
-use crate::connection::{ConnectionInfo, ConnectionMode};
-use crate::version_check::check_desktop_version;
 
 /// Structured JSON-RPC error returned by the gateway/server, carrying the
 /// `code` / `message` / `data` fields so `--json` output can surface the error
@@ -286,7 +286,9 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
             };
             bail!(
                 "Authentication failed (401): {}{}\n\n{}",
-                body.trim(), advice, hint
+                body.trim(),
+                advice,
+                hint
             )
         }
         403 => {
@@ -336,7 +338,10 @@ mod tests {
         let err = ToolError::from(mcp);
         assert_eq!(err.code, -32602);
         assert_eq!(err.message, "Invalid params");
-        assert_eq!(err.data, Some(serde_json::json!({ "guidance": ["fix it"] })));
+        assert_eq!(
+            err.data,
+            Some(serde_json::json!({ "guidance": ["fix it"] }))
+        );
     }
 
     #[test]

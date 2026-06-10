@@ -6,9 +6,9 @@ mod connection;
 mod constants;
 mod manifest;
 mod output;
-mod version_check;
 #[cfg(test)]
 mod test_helpers;
+mod version_check;
 
 use clap::Parser;
 use cli::{AuthAction, Cli, Command, ConnectionArgs};
@@ -67,9 +67,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let conn = resolve_conn(&conn)?;
             commands::status::run(&conn, json_mode).await
         }
-        Command::Doctor { conn } => {
-            commands::doctor::run_from_args(&conn, json_mode).await
-        }
+        Command::Doctor { conn } => commands::doctor::run_from_args(&conn, json_mode).await,
         Command::SelfUpdate => commands::self_update::run().await,
         Command::Mcp { endpoint } => commands::mcp::run(endpoint.as_deref()).await,
         Command::ListLibraries { conn } => {

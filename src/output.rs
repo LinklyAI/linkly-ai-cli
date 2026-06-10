@@ -57,7 +57,12 @@ pub fn print_error(msg: &str, json_mode: bool) -> anyhow::Result<()> {
 /// everything into `message`. Any other error (timeout, transport, tool-level
 /// `isError`, bad arguments) falls back to the plain-string rendering.
 pub fn print_tool_error(err: &anyhow::Error, json_mode: bool) -> anyhow::Result<()> {
-    if let Some(ToolError { code, message, data }) = err.downcast_ref::<ToolError>() {
+    if let Some(ToolError {
+        code,
+        message,
+        data,
+    }) = err.downcast_ref::<ToolError>()
+    {
         if json_mode {
             println!("{}", tool_error_envelope(*code, message, data.as_ref()));
         } else {

@@ -79,10 +79,7 @@ fn try_write_manifest() -> anyhow::Result<()> {
             .mode(0o644)
             .open(&manifest_path)
             .with_context(|| {
-                format!(
-                    "Failed to open manifest file: {}",
-                    manifest_path.display()
-                )
+                format!("Failed to open manifest file: {}", manifest_path.display())
             })?;
         file.write_all(json_bytes.as_bytes())
             .with_context(|| format!("Failed to write manifest: {}", manifest_path.display()))?;
@@ -223,15 +220,9 @@ mod tests {
         );
         // /usr/local/bin/ is homebrew only on macOS
         if cfg!(target_os = "macos") {
-            assert_eq!(
-                detect_install_method("/usr/local/bin/linkly"),
-                "homebrew"
-            );
+            assert_eq!(detect_install_method("/usr/local/bin/linkly"), "homebrew");
         } else {
-            assert_eq!(
-                detect_install_method("/usr/local/bin/linkly"),
-                "other"
-            );
+            assert_eq!(detect_install_method("/usr/local/bin/linkly"), "other");
         }
     }
 

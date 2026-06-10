@@ -279,7 +279,10 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                     }
                     _ => "Unexpected auth failure for local connection.",
                 };
-                (format!("Authentication failed (401): {}", body.trim()), advice.to_string())
+                (
+                    format!("Authentication failed (401): {}", body.trim()),
+                    advice.to_string(),
+                )
             }
             _ => {
                 let advice = if body.contains("disabled") {
@@ -287,7 +290,10 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                 } else {
                     "Check your credentials and permissions."
                 };
-                (format!("Access denied (403): {}", body.trim()), advice.to_string())
+                (
+                    format!("Access denied (403): {}", body.trim()),
+                    advice.to_string(),
+                )
             }
         };
         // Server is reachable
@@ -450,7 +456,11 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
             checks.push(Check {
                 name: "MCP",
                 ok: true,
-                detail: format!("Round-trip OK, {} tools available ({}ms)", tools.len(), latency),
+                detail: format!(
+                    "Round-trip OK, {} tools available ({}ms)",
+                    tools.len(),
+                    latency
+                ),
                 latency_ms: Some(latency),
                 advice: None,
             });
@@ -526,7 +536,12 @@ fn print_human(checks: &[Check]) {
     } else {
         println!(
             "  {}",
-            format!("{} issue{} found.", issues, if issues == 1 { "" } else { "s" }).red()
+            format!(
+                "{} issue{} found.",
+                issues,
+                if issues == 1 { "" } else { "s" }
+            )
+            .red()
         );
     }
 }

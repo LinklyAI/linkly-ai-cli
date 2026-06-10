@@ -66,8 +66,7 @@ pub fn check_desktop_version(version: &str) -> Result<(), VersionGap> {
     if actual < required {
         // Strip the synthetic `-beta.0` floor so users see the public
         // version label (`0.4.1`) instead of the internal sentinel.
-        let required_label =
-            MIN_DESKTOP_VERSION_FOR_FULL_FEATURES.trim_end_matches("-beta.0");
+        let required_label = MIN_DESKTOP_VERSION_FOR_FULL_FEATURES.trim_end_matches("-beta.0");
         Err(VersionGap {
             actual: version.to_string(),
             required: required_label,

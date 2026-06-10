@@ -4,10 +4,9 @@
 /// or other MCP clients can connect to, while transparently forwarding all
 /// tool calls to the actual Linkly AI desktop app over HTTP.
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router,
+    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
