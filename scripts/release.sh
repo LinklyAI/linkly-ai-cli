@@ -107,8 +107,16 @@ update_cargo_version() {
     { print }
   ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 
-  # Regenerate Cargo.lock
-  cargo generate-lockfile --quiet 2>/dev/null || true
+  # Sync the bumped version into Cargo.lock. `cargo update --workspace` only
+  # refreshes workspace members (works offline, never touches dependency
+  # versions), unlike generate-lockfile which re-resolves everything, needs
+  # registry access, and failed silently here — v0.5.0 shipped with a stale
+  # lockfile because of it. Hard-fail if the sync doesn't land.
+  cargo update --workspace --quiet
+  if ! grep -A1 'name = "linkly-ai-cli"' Cargo.lock | grep -q "version = \"$NEW_VERSION\""; then
+    print_error "Cargo.lock was not synced to $NEW_VERSION — aborting before commit"
+    exit 1
+  fi
 }
 
 confirm_and_execute() {
