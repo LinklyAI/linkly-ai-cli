@@ -76,7 +76,7 @@ linkly find-paths --patterns "Dropbox" --limit 5
 ```bash
 linkly search "machine learning"
 linkly search "API design" --limit 5
-linkly search "notes" --type pdf,md,docx
+linkly search "notes" --type pdf,md,docx,pptx
 linkly search "attention" --library my-research
 linkly search "transformer" --path-glob "*.pdf"
 linkly search "quarterly report" --modified-after 2024-01-01 --modified-before 2024-12-31
@@ -86,7 +86,7 @@ linkly search "weekly notes" --time-sort newest --limit 10
 | Option                       | Description                                                                                                                                                                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--limit <N>`                | Maximum results (default: 20, max: 50)                                                                                                                                                                                       |
-| `--type <types>`             | Filter by document types, comma-separated (e.g. `pdf,md,docx,txt,html`)                                                                                                                                                      |
+| `--type <types>`             | Filter by document types, comma-separated (e.g. `pdf,md,docx,pptx,txt,html`)                                                                                                                                                      |
 | `--library <name>`           | Restrict search to a specific library by name                                                                                                                                                                                |
 | `--path-glob <pat>`          | Glob **substring-matched** against the file path — may appear anywhere, no leading/trailing `*` needed. `*` matches any chars (incl. `/`), `?` one char. Examples: `*.pdf`, `papers`, `/Users/me/notes/` (a full directory path scopes to that dir). When the actual path is unknown, run `linkly find-paths` first. |
 | `--modified-after <iso>`     | Inclusive lower bound on file modification time. Accepts a bare date (`2024-01-01`) or RFC 3339 (`2024-01-01T00:00:00Z`). UTC. Use for explicit windows like "after January 2024".                                           |

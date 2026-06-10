@@ -62,7 +62,7 @@ pub struct SearchInput {
 
     #[serde(default)]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"txt\", \"html\", \"image\"]"
+        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"pptx\", \"txt\", \"html\", \"image\"]"
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -319,7 +319,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "outline",
-        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: only documents with reliable parsed outlines (e.g. Markdown, DOCX with headings) will show structural outlines; for other documents, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
+        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: only documents with reliable parsed outlines (e.g. Markdown, DOCX with headings, PPTX slide outlines) will show structural outlines; for other documents, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
     )]
     async fn outline(
         &self,
@@ -359,7 +359,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "grep",
-        description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types (PDF, Markdown, DOCX, TXT, HTML, Image). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
+        description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types (PDF, Markdown, DOCX, PPTX, TXT, HTML, Image). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
     )]
     async fn grep(
         &self,
