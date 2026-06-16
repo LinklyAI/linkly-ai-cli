@@ -122,6 +122,14 @@ mod tests {
     }
 
     #[test]
+    fn epub_is_accepted() {
+        assert_eq!(
+            validate_doc_types(Some(vec!["epub".into()])),
+            Ok(Some(vec!["epub".into()]))
+        );
+    }
+
+    #[test]
     fn mixed_valid_types_pass() {
         assert_eq!(
             validate_doc_types(Some(vec!["pdf".into(), "pptx".into(), "md".into()])),
@@ -136,6 +144,8 @@ mod tests {
         assert!(err.contains("Supported:"));
         // Regression guard: pptx must be advertised as a supported type.
         assert!(err.contains("pptx"));
+        // Regression guard: epub must be advertised as a supported type.
+        assert!(err.contains("epub"));
     }
 
     #[test]
