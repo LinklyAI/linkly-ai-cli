@@ -1,10 +1,20 @@
 use clap::{Args, Parser, Subcommand};
 
+/// Where to send users who need more than `--help` can give them. Kept pointing
+/// at the docs community page rather than individual platforms so that adding
+/// or swapping a channel never requires shipping a new CLI build.
+pub const COMMUNITY_URL: &str = "https://linkly.ai/docs/en/community";
+
+const AFTER_HELP: &str = "\
+Docs:      https://linkly.ai/docs
+Community: https://linkly.ai/docs/en/community";
+
 #[derive(Parser)]
 #[command(
     name = "linkly",
     version,
-    about = "Linkly AI — search your local documents from the terminal"
+    about = "Linkly AI — search your local documents from the terminal",
+    after_help = AFTER_HELP
 )]
 pub struct Cli {
     #[command(subcommand)]

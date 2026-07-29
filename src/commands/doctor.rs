@@ -4,7 +4,7 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use serde::Deserialize;
 
-use crate::cli::ConnectionArgs;
+use crate::cli::{ConnectionArgs, COMMUNITY_URL};
 use crate::client::McpClient;
 use crate::connection::{self, ConnectionInfo, ConnectionMode, RemoteHealthResponse};
 
@@ -543,6 +543,7 @@ fn print_human(checks: &[Check]) {
             )
             .red()
         );
+        println!("  Still stuck? Ask the community: {}", COMMUNITY_URL);
     }
 }
 
