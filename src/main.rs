@@ -4,6 +4,7 @@ mod client;
 mod commands;
 mod connection;
 mod constants;
+mod doc_ids;
 mod manifest;
 mod outcome;
 mod output;
@@ -162,7 +163,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         }
         Command::Grep {
             pattern,
-            doc_id,
+            doc_ids,
             context,
             before,
             after,
@@ -173,13 +174,14 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             fuzzy_whitespace,
             conn,
         } => {
+            let doc_ids = doc_ids::resolve(&doc_ids)?;
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::grep::run(
                 &client,
                 &conn,
                 &pattern,
-                &doc_id,
+                &doc_ids,
                 context,
                 before,
                 after,
@@ -193,6 +195,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .await
         }
         Command::Outline { ids, expand, conn } => {
+            let ids = doc_ids::resolve(&ids)?;
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::outline::run(&client, &conn, &ids, expand, json_mode)
@@ -200,15 +203,16 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
                 .map(found)
         }
         Command::Read {
-            id,
+            ids,
             offset,
             limit,
             image_text,
             conn,
         } => {
+            let ids = doc_ids::resolve(&ids)?;
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::read::run(&client, &conn, &id, offset, limit, image_text, json_mode)
+            commands::read::run(&client, &conn, &ids, offset, limit, image_text, json_mode)
                 .await
                 .map(found)
         }

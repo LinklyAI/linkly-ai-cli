@@ -135,8 +135,9 @@ pub enum Command {
         /// Regular expression pattern
         pattern: String,
 
-        /// Document ID to search within (from search results)
-        doc_id: String,
+        /// Document IDs to search within. Pass '-' to read the IDs from stdin, one per line
+        #[arg(required = true)]
+        doc_ids: Vec<String>,
 
         /// Lines of context before and after each match
         #[arg(short = 'C', long)]
@@ -176,7 +177,7 @@ pub enum Command {
 
     /// Get document outlines by IDs
     Outline {
-        /// Document IDs (from search results)
+        /// Document IDs from search. Pass '-' to read the IDs from stdin, one per line
         #[arg(required = true)]
         ids: Vec<String>,
 
@@ -190,8 +191,9 @@ pub enum Command {
 
     /// Read document content by ID
     Read {
-        /// Document ID (from search results)
-        id: String,
+        /// Document IDs from search. Pass '-' to read the IDs from stdin, one per line
+        #[arg(required = true)]
+        ids: Vec<String>,
 
         /// Starting line number (1-based)
         #[arg(long)]
