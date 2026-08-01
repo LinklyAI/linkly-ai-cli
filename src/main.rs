@@ -101,6 +101,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         Command::Doctor { conn } => commands::doctor::run_from_args(&conn, json_mode)
             .await
             .map(found),
+        Command::Completions { shell } => commands::completions::run(shell).map(found),
         Command::SelfUpdate => commands::self_update::run().await.map(found),
         Command::Mcp { endpoint, remote } => commands::mcp::run(endpoint.as_deref(), remote)
             .await

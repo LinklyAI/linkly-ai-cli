@@ -59,7 +59,7 @@ pub enum Command {
     /// Get a bird's-eye overview of all documents or a specific library
     Explore {
         /// Restrict to a specific library. Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         library: Option<String>,
 
         #[command(flatten)]
@@ -70,11 +70,11 @@ pub enum Command {
     FindPaths {
         /// Keywords to substring-match against file paths (comma-separated, OR semantics).
         /// Pass cross-language or spelling variants in one call, e.g. "WeChat,微信,wxid"
-        #[arg(long, value_delimiter = ',', required = true)]
+        #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',', required = true)]
         patterns: Vec<String>,
 
         /// Restrict to a specific library. Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         library: Option<String>,
 
         /// Maximum number of folder candidates to return (default: 10, max: 50)
@@ -99,7 +99,7 @@ pub enum Command {
         r#type: Option<Vec<String>>,
 
         /// Restrict search to a specific library. Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         library: Option<String>,
 
         /// Glob substring-matched against the file path (no leading/trailing * needed). * = any chars incl. /, ? = one char. Examples: '*.pdf', 'papers', '/abs/dir/'
@@ -119,11 +119,11 @@ pub enum Command {
         time_sort: Option<String>,
 
         /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to local markdown card notes and IGNORES --library and --path-glob. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: Option<String>,
 
         /// Filter by note tags (comma-separated, AND semantics). Leading '#' is stripped and ASCII lowercased. Most useful with --scope notes
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
         #[command(flatten)]
@@ -214,11 +214,11 @@ pub enum Command {
     /// Enumerate a container (currently: notes)
     List {
         /// Container scope to list. Required. 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: String,
 
         /// Filter by tags (comma-separated, AND semantics)
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
         /// Maximum items to return (default: 50, max: 200; max 50 unless --no-snippet)
@@ -252,15 +252,15 @@ pub enum Command {
         content: String,
 
         /// Note UUID. Required for --mode edit
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         note_id: Option<String>,
 
         /// Current version hash from `linkly list --scope notes`. Required for --mode edit
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         base_version: Option<String>,
 
         /// Tags (comma-separated). Optional on create; on edit this is the FULL replacement set
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
         #[command(flatten)]
@@ -288,6 +288,29 @@ pub enum Command {
         /// Bridge through the cloud gateway (https://mcp.linkly.ai), reaching local and linked cloud libraries. Requires `linkly auth set-key` first.
         #[arg(long, conflicts_with = "endpoint")]
         remote: bool,
+    },
+
+    /// Print a shell completion script
+    #[command(long_about = "\
+Print a shell completion script to stdout.
+
+The script is static: it completes subcommands, flags and fixed value sets. It
+does not query the desktop app, so it never blocks your prompt and works with
+Linkly AI closed.
+
+  bash        linkly completions bash > /usr/local/etc/bash_completion.d/linkly
+  zsh         linkly completions zsh > \"${fpath[1]}/_linkly\"
+  fish        linkly completions fish > ~/.config/fish/completions/linkly.fish
+  powershell  linkly completions powershell | Out-String | Invoke-Expression
+  elvish      linkly completions elvish > ~/.config/elvish/lib/linkly.elv
+
+Open a new shell afterwards. For zsh, `compinit` must already be running (it is
+under oh-my-zsh); a bare zsh needs `autoload -Uz compinit && compinit` in
+~/.zshrc first.")]
+    Completions {
+        /// Shell to generate the script for
+        #[arg(value_enum)]
+        shell: clap_complete::aot::Shell,
     },
 
     /// Update to the latest version
@@ -394,6 +417,28 @@ mod tests {
             assert!(parse(&["read", "local://1", "--image-text", level]).is_ok());
         }
         assert!(parse(&["read", "local://1", "--image-text", "inline"]).is_err());
+    }
+
+    #[test]
+    fn completions_accepts_every_shell_clap_complete_supports() {
+        // Whatever the enum offers, the CLI must accept — a shell that parses
+        // here but has no generator would be a runtime surprise.
+        for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+            assert!(
+                parse(&["completions", shell]).is_ok(),
+                "{shell} should be accepted"
+            );
+        }
+        assert!(parse(&["completions", "tcsh"]).is_err());
+        assert!(parse(&["completions"]).is_err());
+    }
+
+    #[test]
+    fn completions_needs_no_connection_arguments() {
+        // It renders from the parser itself, so it must work with no desktop
+        // app, no credentials and no network.
+        let cli = parse(&["completions", "zsh"]).expect("parse");
+        assert!(matches!(cli.command, Command::Completions { .. }));
     }
 
     #[test]

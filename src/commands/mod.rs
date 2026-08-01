@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod completions;
 pub mod doctor;
 pub mod explore;
 pub mod find_paths;
