@@ -240,17 +240,22 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
             } else {
                 format!("Connection error: {}", e)
             };
-            let advice = match &conn.mode {
+            let base_advice = match &conn.mode {
                 ConnectionMode::Local => {
-                    Some("Make sure Linkly AI Desktop is running on this machine.".to_string())
+                    "Make sure Linkly AI Desktop is running on this machine.".to_string()
                 }
-                ConnectionMode::Lan { .. } => Some(
-                    "Check that the endpoint is correct and Desktop is running on the target machine.".to_string(),
-                ),
-                ConnectionMode::Remote => {
-                    Some("Check your network connection.".to_string())
+                ConnectionMode::Lan { .. } => {
+                    "Check that the endpoint is correct and Desktop is running on the target machine."
+                        .to_string()
                 }
+                ConnectionMode::Remote => "Check your network connection.".to_string(),
             };
+            // `doctor` exists to point at the real cause; a proxy silently in
+            // the path is exactly the case where the raw error misleads.
+            let advice = Some(match crate::connection::proxy_interception_note(conn) {
+                Some(note) => format!("{}\n    {}", base_advice, note.replace('\n', "\n    ")),
+                None => base_advice,
+            });
             checks.push(Check {
                 name: "Server",
                 ok: false,
@@ -319,7 +324,15 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
         checks.push(Check {
             name: "Server",
             ok: false,
-            detail: format!("HTTP {}: {}", status, body.trim()),
+            detail: match crate::connection::proxy_interception_note(conn) {
+                Some(note) => format!(
+                    "HTTP {}: {} — {}",
+                    status,
+                    body.trim(),
+                    note.lines().next().unwrap_or_default().trim()
+                ),
+                None => format!("HTTP {}: {}", status, body.trim()),
+            },
             latency_ms: Some(latency),
             advice: None,
         });

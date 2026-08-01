@@ -211,6 +211,11 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
     }
 
     let hint = conn.doctor_hint();
+    // Appended to every failure below: when a proxy is silently in the path, the
+    // HTTP error the user sees may be the proxy's rather than Linkly's.
+    let proxy_note = crate::connection::proxy_interception_note(conn)
+        .map(|note| format!("\n{}\n", note))
+        .unwrap_or_default();
 
     let resp = req.send().await.map_err(|e| {
         if e.is_connect() {
@@ -220,16 +225,16 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
                 ConnectionMode::Remote => "Check your network connection.",
             };
             anyhow::anyhow!(
-                "Cannot connect to Linkly AI at {}.\n{}\n\n{}",
-                conn.base_url, advice, hint
+                "Cannot connect to Linkly AI at {}.\n{}\n{}\n{}",
+                conn.base_url, advice, proxy_note, hint
             )
         } else if e.is_timeout() {
             anyhow::anyhow!(
-                "Connection timed out reaching {}.\n\n{}",
-                conn.base_url, hint
+                "Connection timed out reaching {}.\n{}\n{}",
+                conn.base_url, proxy_note, hint
             )
         } else {
-            anyhow::anyhow!("Connection error: {}\n\n{}", e, hint)
+            anyhow::anyhow!("Connection error: {}\n{}\n{}", e, proxy_note, hint)
         }
     })?;
 
@@ -306,7 +311,21 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
         }
         code => {
             let body = resp.text().await.unwrap_or_default();
-            bail!("Server returned HTTP {}: {}\n\n{}", code, body.trim(), hint)
+            // Most proxies answer with an empty body; a dangling ": " reads
+            // like the message got cut off.
+            let body = body.trim();
+            let detail = if body.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", body)
+            };
+            bail!(
+                "Server returned HTTP {}{}\n{}\n{}",
+                code,
+                detail,
+                proxy_note,
+                hint
+            )
         }
     }
 }

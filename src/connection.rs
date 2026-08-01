@@ -202,6 +202,98 @@ pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
     Ok(parsed["apiKey"].as_str().map(|s| s.to_string()))
 }
 
+/// Explain a failed local/LAN connection that an environment proxy is silently
+/// intercepting.
+///
+/// `reqwest` honours `http_proxy` / `all_proxy` like curl and Python do, and
+/// like them it does **not** exempt loopback. So with a proxy configured and no
+/// matching `no_proxy` entry, a request to `127.0.0.1` leaves the machine — and
+/// when the desktop app isn't running, the error the user sees is whatever the
+/// proxy says (typically `HTTP 502`) rather than "nothing is listening".
+///
+/// We deliberately do not change that behaviour: the proxy variables are the
+/// user's explicit configuration, and the same gap affects every other tool on
+/// the machine. What we can do is stop the resulting error from pointing in the
+/// wrong direction.
+///
+/// Returns `None` when nothing would be intercepted — remote connections (where
+/// using the proxy is the point), no proxy configured, or a `no_proxy` that
+/// already covers the host.
+pub fn proxy_interception_note(conn: &ConnectionInfo) -> Option<String> {
+    if conn.is_remote {
+        return None;
+    }
+    let proxy = first_env(&["http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"])?;
+    let host = host_of(&conn.base_url)?;
+    let no_proxy = first_env(&["no_proxy", "NO_PROXY"]).unwrap_or_default();
+    if no_proxy_covers(&no_proxy, &host) {
+        return None;
+    }
+    // First line stands alone as a complete sentence: `doctor` shows only that
+    // line inside its check table, where the multi-line form doesn't fit.
+    Some(format!(
+        "Note: a proxy ({proxy}) is intercepting local requests — no_proxy does not cover {host}.\n\
+         An HTTP error above may be the proxy's answer rather than Linkly's. To rule it out:\n\
+         \n\
+         \x20   no_proxy={host},localhost linkly <command>"
+    ))
+}
+
+/// First of `names` that is set to a non-empty value.
+fn first_env(names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|n| std::env::var(n).ok())
+        .find(|v| !v.trim().is_empty())
+}
+
+/// Host portion of a `scheme://host:port` URL.
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    let host = rest.split('/').next()?;
+    let host = match host.rsplit_once(':') {
+        // Keep bracketed IPv6 literals intact; only strip a trailing port.
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => host,
+    };
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// Does `no_proxy` exempt `host`?
+///
+/// A pragmatic subset of the (unstandardised) no_proxy syntax: `*` matches
+/// everything, an entry matches the host exactly, and a leading-dot entry
+/// matches by domain suffix. CIDR notation is not parsed — `127.0.0.0/8` is
+/// recognised only through the loopback shorthand below.
+fn no_proxy_covers(no_proxy: &str, host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    for entry in no_proxy.split(',') {
+        let entry = entry.trim().trim_end_matches('.').to_ascii_lowercase();
+        if entry.is_empty() {
+            continue;
+        }
+        if entry == "*" || entry == host {
+            return true;
+        }
+        if let Some(suffix) = entry.strip_prefix('.') {
+            if host.ends_with(suffix) {
+                return true;
+            }
+        }
+        // A loopback entry covers the other spellings of the same machine —
+        // users write one of them and mean all of them.
+        if is_loopback(&entry) && is_loopback(&host) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_loopback(host: &str) -> bool {
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
 /// Absolute path of the credentials file (`~/.linkly/credentials.json`).
 ///
 /// Single source of truth so read / write / delete can never disagree about
@@ -274,6 +366,67 @@ pub fn save_credentials_api_key(api_key: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::test_helpers::with_temp_home;
+
+    // ── no_proxy matching ────────────────────────────────
+
+    #[test]
+    fn wildcard_no_proxy_covers_everything() {
+        assert!(no_proxy_covers("*", "127.0.0.1"));
+        assert!(no_proxy_covers("*", "192.168.1.5"));
+    }
+
+    #[test]
+    fn exact_host_entry_matches() {
+        assert!(no_proxy_covers("127.0.0.1", "127.0.0.1"));
+        assert!(no_proxy_covers("example.com,127.0.0.1", "127.0.0.1"));
+        assert!(!no_proxy_covers("example.com", "127.0.0.1"));
+    }
+
+    #[test]
+    fn loopback_spellings_are_interchangeable() {
+        // Users write one spelling and mean the machine, not that literal string.
+        assert!(no_proxy_covers("localhost", "127.0.0.1"));
+        assert!(no_proxy_covers("127.0.0.1", "localhost"));
+        assert!(no_proxy_covers("127.0.0.1", "127.0.0.53"));
+        // But a loopback entry must not exempt a LAN host.
+        assert!(!no_proxy_covers("localhost", "192.168.1.5"));
+    }
+
+    #[test]
+    fn leading_dot_entry_matches_by_suffix() {
+        assert!(no_proxy_covers(".internal.corp", "desktop.internal.corp"));
+        assert!(!no_proxy_covers(".internal.corp", "internal.corp.evil.com"));
+    }
+
+    #[test]
+    fn whitespace_and_empty_entries_are_ignored() {
+        assert!(no_proxy_covers("  localhost , ", "127.0.0.1"));
+        assert!(!no_proxy_covers(",,  ,", "127.0.0.1"));
+    }
+
+    // ── host extraction ──────────────────────────────────
+
+    #[test]
+    fn host_is_extracted_without_scheme_or_port() {
+        assert_eq!(
+            host_of("http://127.0.0.1:60606").as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(
+            host_of("http://192.168.1.5:60606/mcp").as_deref(),
+            Some("192.168.1.5")
+        );
+        assert_eq!(
+            host_of("https://mcp.linkly.ai").as_deref(),
+            Some("mcp.linkly.ai")
+        );
+    }
+
+    #[test]
+    fn ipv6_literals_keep_their_address() {
+        // A bracketed literal must not be truncated at the colons inside it.
+        assert_eq!(host_of("http://[::1]:60606").as_deref(), Some("::1"));
+    }
 
     // ── T3.1: Mode 1 — Endpoint ──────────────────────────
 

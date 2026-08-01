@@ -64,10 +64,21 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
                 }
             );
         }
+        // A proxy in the path answers with its own status codes, so say so
+        // rather than let the user read a 502 as "Linkly is broken". Returns
+        // nothing for remote connections, where using the proxy is the point.
+        let proxy_note = crate::connection::proxy_interception_note(conn)
+            .map(|note| format!("\n\n{}", note))
+            .unwrap_or_default();
         if body_trimmed.is_empty() {
-            anyhow::bail!("Server error (HTTP {})", status_code);
+            anyhow::bail!("Server error (HTTP {}){}", status_code, proxy_note);
         }
-        anyhow::bail!("Server error (HTTP {}): {}", status_code, body_trimmed);
+        anyhow::bail!(
+            "Server error (HTTP {}): {}{}",
+            status_code,
+            body_trimmed,
+            proxy_note
+        );
     }
 
     let health: HealthResponse = resp.json().await?;
@@ -191,10 +202,21 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     if !(200..300).contains(&status_code) {
         let body = resp.text().await.unwrap_or_default();
         let body_trimmed = body.trim();
+        // A proxy in the path answers with its own status codes, so say so
+        // rather than let the user read a 502 as "Linkly is broken". Returns
+        // nothing for remote connections, where using the proxy is the point.
+        let proxy_note = crate::connection::proxy_interception_note(conn)
+            .map(|note| format!("\n\n{}", note))
+            .unwrap_or_default();
         if body_trimmed.is_empty() {
-            anyhow::bail!("Server error (HTTP {})", status_code);
+            anyhow::bail!("Server error (HTTP {}){}", status_code, proxy_note);
         }
-        anyhow::bail!("Server error (HTTP {}): {}", status_code, body_trimmed);
+        anyhow::bail!(
+            "Server error (HTTP {}): {}{}",
+            status_code,
+            body_trimmed,
+            proxy_note
+        );
     }
 
     let health: RemoteHealthResponse = resp.json().await?;
