@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use crate::client::McpClient;
 use crate::connection::ConnectionInfo;
+use crate::outcome::{classify, Outcome, ResultShape};
 use crate::output;
 
 pub async fn run(
@@ -11,7 +12,7 @@ pub async fn run(
     library: Option<String>,
     limit: Option<u32>,
     json_mode: bool,
-) -> Result<()> {
+) -> Result<Outcome> {
     if patterns.is_empty() {
         return output::print_error("--patterns must contain at least one keyword", json_mode);
     }
@@ -31,9 +32,11 @@ pub async fn run(
     }
 
     match client.call_tool("find_paths", args, conn).await {
-        Ok(content) => output::print_result(&content, json_mode),
-        Err(e) => return output::print_tool_error(&e, json_mode),
+        Ok(content) => {
+            let outcome = classify(&content, ResultShape::FindPaths, json_mode);
+            output::print_result(&content, json_mode);
+            Ok(outcome)
+        }
+        Err(e) => output::print_tool_error(&e, json_mode),
     }
-
-    Ok(())
 }

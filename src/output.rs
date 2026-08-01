@@ -35,7 +35,7 @@ pub fn print_result(content: &str, json_mode: bool) {
 /// validation failure would print the error and then exit 0, breaking
 /// shell pipelines like `linkly search "" && deploy` and CI scripts
 /// that key off `$?`.
-pub fn print_error(msg: &str, json_mode: bool) -> anyhow::Result<()> {
+pub fn print_error<T>(msg: &str, json_mode: bool) -> anyhow::Result<T> {
     if json_mode {
         let envelope = serde_json::json!({
             "status": "error",
@@ -56,7 +56,7 @@ pub fn print_error(msg: &str, json_mode: bool) -> anyhow::Result<()> {
 /// gateway's `guidance` / `example`) as dedicated fields instead of flattening
 /// everything into `message`. Any other error (timeout, transport, tool-level
 /// `isError`, bad arguments) falls back to the plain-string rendering.
-pub fn print_tool_error(err: &anyhow::Error, json_mode: bool) -> anyhow::Result<()> {
+pub fn print_tool_error<T>(err: &anyhow::Error, json_mode: bool) -> anyhow::Result<T> {
     if let Some(ToolError {
         code,
         message,
@@ -124,7 +124,7 @@ mod tests {
             data: None,
         }
         .into();
-        let result = print_tool_error(&err, true);
+        let result: anyhow::Result<()> = print_tool_error(&err, true);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "");
     }
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn print_tool_error_plain_returns_empty_err() {
         let err = anyhow::anyhow!("plain transport error");
-        let result = print_tool_error(&err, true);
+        let result: anyhow::Result<()> = print_tool_error(&err, true);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "");
     }

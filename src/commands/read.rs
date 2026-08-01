@@ -10,6 +10,7 @@ pub async fn run(
     id: &str,
     offset: Option<usize>,
     limit: Option<usize>,
+    image_text: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     let mut args = serde_json::json!({ "doc_id": id });
@@ -19,6 +20,9 @@ pub async fn run(
     }
     if let Some(limit) = limit {
         args["limit"] = serde_json::json!(limit);
+    }
+    if let Some(detail) = image_text {
+        args["image_text"] = serde_json::json!(detail);
     }
     if json_mode {
         args["output_format"] = serde_json::json!("json");

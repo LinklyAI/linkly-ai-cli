@@ -166,10 +166,7 @@ pub fn resolve(
 /// - `Ok(None)` — file does not exist (user never ran `auth set-key`)
 /// - `Err(...)` — file exists but is corrupted or unreadable
 pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
-    let path = dirs::home_dir()
-        .context("Cannot determine home directory")?
-        .join(".linkly")
-        .join(CREDENTIALS_FILE);
+    let path = credentials_path()?;
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -205,16 +202,45 @@ pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
     Ok(parsed["apiKey"].as_str().map(|s| s.to_string()))
 }
 
+/// Absolute path of the credentials file (`~/.linkly/credentials.json`).
+///
+/// Single source of truth so read / write / delete can never disagree about
+/// where the file lives — and so `auth status` can show the user the real path
+/// instead of a hardcoded string.
+pub fn credentials_path() -> Result<std::path::PathBuf> {
+    Ok(dirs::home_dir()
+        .context("Cannot determine home directory")?
+        .join(".linkly")
+        .join(CREDENTIALS_FILE))
+}
+
+/// Delete the credentials file.
+///
+/// Returns whether a file was actually removed. A missing file is **not** an
+/// error: the caller asked for "no stored credentials", and that already holds.
+pub fn delete_credentials() -> Result<bool> {
+    let path = credentials_path()?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(anyhow::anyhow!(
+            "Failed to remove credentials file {}: {}",
+            path.display(),
+            e
+        )),
+    }
+}
+
 /// Save API key to ~/.linkly/credentials.json (new format with remotes array)
 pub fn save_credentials_api_key(api_key: &str) -> Result<()> {
-    let dir = dirs::home_dir()
-        .context("Cannot determine home directory")?
-        .join(".linkly");
+    let path = credentials_path()?;
+    let dir = path
+        .parent()
+        .context("Credentials path has no parent directory")?;
 
-    std::fs::create_dir_all(&dir)
+    std::fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
 
-    let path = dir.join(CREDENTIALS_FILE);
     let content = serde_json::json!({
         "remotes": [{ "name": "default", "key": api_key }]
     });

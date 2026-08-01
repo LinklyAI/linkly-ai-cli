@@ -8,13 +8,21 @@ use crate::connection;
 /// Run the MCP stdio bridge.
 ///
 /// This creates a stdio MCP server that Claude Desktop (or any MCP client)
-/// can connect to. All tool calls are transparently forwarded to the
-/// Linkly AI desktop app's HTTP MCP server.
+/// can connect to. All tool calls are transparently forwarded upstream.
 ///
-/// Only supports local and LAN endpoint modes (no --remote/--token).
-/// When `--endpoint` is used, the URL is normalized through `connection::resolve`.
-pub async fn run(endpoint: Option<&str>) -> Result<()> {
-    let conn = connection::resolve(endpoint, None, false)?;
+/// The upstream decides what the client can reach, and the three modes are not
+/// interchangeable:
+/// - default — the local desktop. Local content only; `cloud://` is rejected.
+/// - `--endpoint` — a desktop on the LAN. Same content boundary as local.
+/// - `--remote` — the cloud gateway, which serves local content through the
+///   desktop tunnel **and** linked cloud libraries. This is the only bridge
+///   mode that can reach cloud libraries at all.
+///
+/// `--token` is still not accepted: LAN bearer auth is a per-request concern
+/// the bridge does not model, and `--remote` authenticates from the stored
+/// credentials instead.
+pub async fn run(endpoint: Option<&str>, remote: bool) -> Result<()> {
+    let conn = connection::resolve(endpoint, None, remote)?;
 
     // Connect to the desktop app's MCP server. The bridge is a transparent
     // passthrough — skip the version gate so an old Desktop's "tool not

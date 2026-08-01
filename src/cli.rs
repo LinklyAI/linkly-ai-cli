@@ -111,6 +111,14 @@ pub enum Command {
         #[arg(long, value_parser = ["default", "newest", "oldest"])]
         time_sort: Option<String>,
 
+        /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to local markdown card notes and IGNORES --library and --path-glob
+        #[arg(long, value_parser = ["folder", "notes"])]
+        scope: Option<String>,
+
+        /// Filter by note tags (comma-separated, AND semantics). Leading '#' is stripped and ASCII lowercased. Most useful with --scope notes
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+
         #[command(flatten)]
         conn: ConnectionArgs,
     },
@@ -186,6 +194,66 @@ pub enum Command {
         #[arg(long)]
         limit: Option<usize>,
 
+        /// Detail for the referenced-images block: 'none' (mapping only), 'abstract' (default: plus excerpt and word count), 'full' (plus inline OCR text)
+        #[arg(long, value_parser = ["none", "abstract", "full"])]
+        image_text: Option<String>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Enumerate a container (currently: notes)
+    List {
+        /// Container scope to list. Required. Currently only 'notes' is accepted
+        #[arg(long, value_parser = ["notes"])]
+        scope: String,
+
+        /// Filter by tags (comma-separated, AND semantics)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+
+        /// Maximum items to return (default: 50, max: 200; max 50 unless --no-snippet)
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Pagination offset in sort order (default: 0)
+        #[arg(long)]
+        offset: Option<usize>,
+
+        /// Sort order: 'recent' (default), 'oldest', or 'name'
+        #[arg(long, value_parser = ["recent", "oldest", "name"])]
+        sort: Option<String>,
+
+        /// Omit per-item snippets, allowing --limit above 50
+        #[arg(long)]
+        no_snippet: bool,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Create or rewrite a local markdown note
+    NoteSave {
+        /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id, --base-version and --tags together)
+        #[arg(long, value_parser = ["create", "edit"])]
+        mode: String,
+
+        /// Markdown body without YAML front matter. Pass '-' to read the body from stdin
+        #[arg(long)]
+        content: String,
+
+        /// Note UUID. Required for --mode edit
+        #[arg(long)]
+        note_id: Option<String>,
+
+        /// Current version hash from `linkly list --scope notes`. Required for --mode edit
+        #[arg(long)]
+        base_version: Option<String>,
+
+        /// Tags (comma-separated). Optional on create; on edit this is the FULL replacement set
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+
         #[command(flatten)]
         conn: ConnectionArgs,
     },
@@ -202,11 +270,15 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Only supports local and LAN modes; use --endpoint for LAN.
+    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Default bridges to the local desktop; --endpoint bridges to a LAN desktop; --remote bridges through the cloud gateway (local + cloud libraries).
     Mcp {
         /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "remote")]
         endpoint: Option<String>,
+
+        /// Bridge through the cloud gateway (https://mcp.linkly.ai), reaching local and linked cloud libraries. Requires `linkly auth set-key` first.
+        #[arg(long, conflicts_with = "endpoint")]
+        remote: bool,
     },
 
     /// Update to the latest version
@@ -226,4 +298,91 @@ pub enum AuthAction {
         /// API key (format: lkai_...)
         key: String,
     },
+
+    /// Show the stored credential and the account it belongs to
+    Status,
+
+    /// Remove the stored credential
+    Logout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// clap's own consistency checks (duplicate flags, bad defaults, broken
+    /// conflicts). Cheap insurance against a malformed derive shipping.
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("linkly").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn mcp_endpoint_and_remote_are_mutually_exclusive() {
+        // Bridging to a LAN desktop and bridging through the cloud gateway are
+        // different upstreams; accepting both would silently pick one.
+        assert!(parse(&["mcp", "--endpoint", "http://x:1/mcp", "--remote"]).is_err());
+        assert!(parse(&["mcp", "--remote"]).is_ok());
+        assert!(parse(&["mcp", "--endpoint", "http://x:1/mcp"]).is_ok());
+        assert!(parse(&["mcp"]).is_ok());
+    }
+
+    #[test]
+    fn list_requires_a_scope() {
+        assert!(parse(&["list"]).is_err());
+        assert!(parse(&["list", "--scope", "notes"]).is_ok());
+        // Unknown scopes are rejected at the CLI layer.
+        assert!(parse(&["list", "--scope", "folder"]).is_err());
+    }
+
+    #[test]
+    fn note_save_requires_mode_and_content() {
+        assert!(parse(&["note-save"]).is_err());
+        assert!(parse(&["note-save", "--mode", "create"]).is_err());
+        assert!(parse(&["note-save", "--content", "hi"]).is_err());
+        assert!(parse(&["note-save", "--mode", "create", "--content", "hi"]).is_ok());
+        // Only the two documented modes.
+        assert!(parse(&["note-save", "--mode", "upsert", "--content", "hi"]).is_err());
+    }
+
+    #[test]
+    fn search_scope_accepts_only_folder_and_notes() {
+        assert!(parse(&["search", "q", "--scope", "notes"]).is_ok());
+        assert!(parse(&["search", "q", "--scope", "folder"]).is_ok());
+        assert!(parse(&["search", "q", "--scope", "libraries"]).is_err());
+    }
+
+    #[test]
+    fn read_image_text_accepts_only_the_three_detail_levels() {
+        for level in ["none", "abstract", "full"] {
+            assert!(parse(&["read", "local://1", "--image-text", level]).is_ok());
+        }
+        assert!(parse(&["read", "local://1", "--image-text", "inline"]).is_err());
+    }
+
+    #[test]
+    fn comma_separated_tags_split_into_a_list() {
+        let cli = parse(&["search", "q", "--tags", "work,urgent"]).expect("parse");
+        match cli.command {
+            Command::Search { tags, .. } => {
+                assert_eq!(
+                    tags.as_deref(),
+                    Some(&["work".to_string(), "urgent".to_string()][..])
+                );
+            }
+            _ => panic!("expected search"),
+        }
+    }
+
+    #[test]
+    fn auth_gained_status_and_logout_without_losing_set_key() {
+        assert!(parse(&["auth", "status"]).is_ok());
+        assert!(parse(&["auth", "logout"]).is_ok());
+        assert!(parse(&["auth", "set-key", "lkai_x"]).is_ok());
+    }
 }

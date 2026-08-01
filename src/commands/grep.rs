@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use crate::client::McpClient;
 use crate::connection::ConnectionInfo;
+use crate::outcome::{classify, Outcome, ResultShape};
 use crate::output;
 
 #[allow(clippy::too_many_arguments)]
@@ -19,7 +20,7 @@ pub async fn run(
     offset: Option<usize>,
     fuzzy_whitespace: Option<bool>,
     json_mode: bool,
-) -> Result<()> {
+) -> Result<Outcome> {
     let mut args = serde_json::json!({
         "pattern": pattern,
         "doc_id": doc_id,
@@ -54,9 +55,11 @@ pub async fn run(
     }
 
     match client.call_tool("grep", args, conn).await {
-        Ok(content) => output::print_result(&content, json_mode),
-        Err(e) => return output::print_tool_error(&e, json_mode),
+        Ok(content) => {
+            let outcome = classify(&content, ResultShape::Grep, json_mode);
+            output::print_result(&content, json_mode);
+            Ok(outcome)
+        }
+        Err(e) => output::print_tool_error(&e, json_mode),
     }
-
-    Ok(())
 }

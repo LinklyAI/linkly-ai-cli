@@ -31,7 +31,13 @@ impl StdioBridgeHandler {
     }
 }
 
-// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs (the file lands on main once the v0.4.1 feat branch merges) ───
+// ── Input types — SYNC: keep in sync with linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs ───
+//
+// The bridge is NOT a transparent proxy: every tool it exposes is declared
+// here, so a tool or parameter the desktop gained but this file didn't is
+// invisible to bridged clients (and, thanks to `deny_unknown_fields`, an
+// unknown parameter is rejected here rather than reaching the desktop).
+// Adding MCP surface to the desktop therefore requires a matching change here.
 //
 // Every struct must carry `#[serde(deny_unknown_fields)]` so a client typo
 // (e.g. `modifiedafter`) fails fast at the bridge instead of silently
@@ -61,7 +67,7 @@ pub struct SearchInput {
 
     #[serde(default)]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"pptx\", \"epub\", \"txt\", \"html\", \"image\"]"
+        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"pptx\", \"epub\", \"txt\", \"html\", \"image\", \"audio\", \"video\"]"
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -103,6 +109,18 @@ pub struct SearchInput {
         description = "Reorder the matched candidate set by modification time. \"default\" preserves hybrid relevance ordering; \"newest\" puts the most recently modified first; \"oldest\" puts the earliest first. Use \"newest\" for \"recent / latest\" intent without a fixed window."
     )]
     pub time_sort: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Search scope. \"folder\" (default) searches all indexed content with the existing library/path_glob semantics. \"notes\" restricts results to the local Notes folder (markdown card notes) and ignores library/path_glob. Unknown values are rejected."
+    )]
+    pub scope: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Filter results to documents carrying ALL of the given note tags (AND semantics). Tags are normalized (leading '#' stripped, ASCII lowercased). Callers needing OR should issue one call per tag and union the results. Most useful together with scope=\"notes\"."
+    )]
+    pub tags: Option<Vec<String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
@@ -191,6 +209,12 @@ pub struct ReadInput {
     pub limit: Option<usize>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Detail level for the referenced-images mapping appended to the result (markdown image refs found within the shown line range are resolved to indexed image documents): \"none\" = mapping only (line, file, doc_id); \"abstract\" (default) = plus one-line text excerpt and word count per image; \"full\" = plus inline OCR text (per-image 2000-char cap, 20000-char total budget; over-budget images degrade to abstract)."
+    )]
+    pub image_text: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
 }
@@ -231,6 +255,83 @@ pub struct FindPathsInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Output format: \"json\" for structured JSON, omit for Markdown")]
     pub output_format: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListInput {
+    #[schemars(
+        description = "Container scope to list. REQUIRED. \"notes\" = the user's local markdown card notes. Unknown values are rejected. Note: `search.scope` has a value also spelled \"folder\" that means \"all indexed content\" — that is a different concept from this parameter and the two do not share values."
+    )]
+    pub scope: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Return only notes carrying ALL of the given tags (AND semantics). Tags are normalized like `search.tags` (leading '#' stripped, ASCII lowercased). For keyword search over notes use `search` with scope=\"notes\" instead — `list` does no full-text matching."
+    )]
+    pub tags: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum items to return (default: 50, max: 200). While `snippet` is enabled (the default for scope=\"notes\") the max drops to 50 — set snippet=false to page with larger limits."
+    )]
+    pub limit: Option<usize>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Pagination offset counted from the first item in sort order (default: 0). Page order equals sort direction. Use `has_more` to decide whether to fetch the next page."
+    )]
+    pub offset: Option<usize>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Include a snippet per item. Default for scope=\"notes\": true (first ~200 chars of the note body, YAML stripped). When false the `snippet` field is null and `limit` may go up to 200."
+    )]
+    pub snippet: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Sort order. \"recent\" (default): for notes this is creation time, newest first. \"oldest\": creation time, earliest first. \"name\": file basename, UTF-8 code point order, A to Z."
+    )]
+    pub sort: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Output format. scope=\"notes\" defaults to \"json\" — each item is a CAS handle (note_id + version) for note_save mode=\"edit\". \"markdown\" is available as a human-readable opt-in."
+    )]
+    pub output_format: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoteSaveInput {
+    #[schemars(
+        description = "Operation mode: \"create\" writes a new note; \"edit\" rewrites an existing one. Edit REQUIRES note_id, base_version AND tags (the full replacement tag set) — missing fields return NOTE_INVALID_INPUT with a fix example."
+    )]
+    pub mode: String,
+
+    #[schemars(
+        description = "Markdown body without YAML front matter. The server generates and owns all YAML metadata (note_id, timestamps, source, tags). ALLOWED markdown: paragraphs/line breaks, bold, strikethrough, ordered/unordered lists, plain text. EVERYTHING ELSE is rejected — headings, italics, blockquotes, inline code, code blocks, links, images, raw HTML, thematic breaks, tables, task lists and footnotes. Inline #tags in the body stay plain text — use the explicit `tags` parameter instead."
+    )]
+    pub content: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Note UUID. Required for mode=\"edit\". Optional for mode=\"create\" and reserved for future cloud sync — a create carrying an existing note_id is rejected as NOTE_DUPLICATE_ID."
+    )]
+    pub note_id: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "The note's current version hash (sha256 of the raw file), required for mode=\"edit\". Obtain it from `list` (scope=\"notes\") or a previous note_save response. A stale value returns NOTE_VERSION_CONFLICT with the actual version — re-read before retrying; never overwrite blindly."
+    )]
+    pub base_version: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Note tags. POLICY: do NOT add tags on your own initiative — only pass tags the user explicitly asked for; never invent them. Create: optional. Edit: REQUIRED and treated as the FULL replacement set — pass back exactly what you read to leave tags unchanged; omitting a previously present tag removes it."
+    )]
+    pub tags: Option<Vec<String>>,
 }
 
 // ── Tool implementations ────────────────────────────────
@@ -357,8 +458,48 @@ impl StdioBridgeHandler {
     }
 
     #[tool(
+        name = "list",
+        description = "Enumerate the contents of a container. Unlike `search` this does NO full-text matching — it lists and paginates. `scope` is REQUIRED; currently only \"notes\" (the user's local markdown card notes) is accepted. Use `tags` to filter (AND semantics), `sort` for ordering (recent / oldest / name) and offset+limit to page. Every response carries `available_tags` — the tags actually in use across all notes; reuse those instead of inventing new ones. Each item carries note_id + version, which together are the handle required by `note_save` mode=\"edit\". To find notes by content, use `search` with scope=\"notes\" instead."
+    )]
+    async fn list(
+        &self,
+        Parameters(input): Parameters<ListInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let args = serde_json::to_value(&input)
+            .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
+
+        let content = self
+            .client
+            .call_tool("list", args, &self.conn)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
+    #[tool(
+        name = "note_save",
+        description = "Create or rewrite one of the user's local markdown notes. THIS IS A WRITE TOOL — every other Linkly tool is read-only. mode=\"create\" writes a new note; mode=\"edit\" rewrites an existing one and REQUIRES note_id + base_version + tags together (base_version is optimistic concurrency: a stale value returns NOTE_VERSION_CONFLICT with the actual version — re-read via `list` and retry, never overwrite blindly). On edit, `tags` is the FULL replacement set: omitting a previously present tag deletes it. Content is a restricted markdown subset (paragraphs, line breaks, bold, strikethrough, lists) — headings, code, links, images, tables and raw HTML are rejected. Never write YAML front matter; the server owns all metadata. Do not add tags the user did not ask for."
+    )]
+    async fn note_save(
+        &self,
+        Parameters(input): Parameters<NoteSaveInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let args = serde_json::to_value(&input)
+            .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
+
+        let content = self
+            .client
+            .call_tool("note_save", args, &self.conn)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
+    #[tool(
         name = "grep",
-        description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types (PDF, EPUB, Markdown, DOCX, PPTX, TXT, HTML, Image). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
+        description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types, including text derived from images and scanned PDFs (OCR) and from audio and video (transcripts). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
     )]
     async fn grep(
         &self,
