@@ -12,6 +12,14 @@ use crate::output;
 /// agents composing a note from prior output already have it on a pipe.
 const STDIN_SENTINEL: &str = "-";
 
+/// Upper bound on a piped note body, mirroring the desktop's own
+/// `MAX_CONTENT_BYTES` (`src-tauri/src/notes/service.rs`). Without a cap,
+/// `read_to_string` grows unboundedly — and this command exists precisely to be
+/// fed from a pipe, so an over-long or endless producer would take the process
+/// down instead of failing with a usable message. Reading one byte past the
+/// limit is enough to tell "at the limit" from "over" it.
+const MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
+
 /// Run `linkly note-save --mode create|edit`.
 ///
 /// The desktop owns all YAML front matter and all validation (markdown
@@ -119,11 +127,25 @@ fn read_content(content: &str) -> Result<String> {
     if content != STDIN_SENTINEL {
         return Ok(content.to_string());
     }
-    let mut buf = String::new();
-    std::io::stdin()
-        .read_to_string(&mut buf)
+    read_capped(std::io::stdin().lock())
+}
+
+/// Read a note body from `reader`, refusing anything past the desktop's limit
+/// rather than buffering it all first.
+fn read_capped(reader: impl Read) -> Result<String> {
+    let mut buf = Vec::new();
+    reader
+        .take(MAX_CONTENT_BYTES as u64 + 1)
+        .read_to_end(&mut buf)
         .map_err(|e| anyhow::anyhow!("Failed to read note content from stdin: {}", e))?;
-    Ok(buf)
+    if buf.len() > MAX_CONTENT_BYTES {
+        anyhow::bail!(
+            "Note content exceeds the {} MB limit. Notes are short cards — write the long-form content to a file and index it instead.",
+            MAX_CONTENT_BYTES / (1024 * 1024)
+        );
+    }
+    String::from_utf8(buf)
+        .map_err(|_| anyhow::anyhow!("Note content from stdin is not valid UTF-8"))
 }
 
 #[cfg(test)]
@@ -133,6 +155,35 @@ mod tests {
     #[test]
     fn literal_content_passes_through_unchanged() {
         assert_eq!(read_content("hello").unwrap(), "hello");
+    }
+
+    #[test]
+    fn piped_content_under_the_cap_is_read_whole() {
+        let body = "a".repeat(1024);
+        assert_eq!(read_capped(body.as_bytes()).unwrap(), body);
+    }
+
+    #[test]
+    fn content_exactly_at_the_cap_is_accepted() {
+        let body = vec![b'a'; MAX_CONTENT_BYTES];
+        assert_eq!(read_capped(&body[..]).unwrap().len(), MAX_CONTENT_BYTES);
+    }
+
+    #[test]
+    fn content_past_the_cap_is_refused_instead_of_buffered() {
+        let body = vec![b'a'; MAX_CONTENT_BYTES + 1];
+        let err = read_capped(&body[..]).unwrap_err().to_string();
+        assert!(err.contains("exceeds"), "unexpected message: {err}");
+        assert!(
+            err.contains("10 MB"),
+            "limit should be stated in the message: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_utf8_on_stdin_is_a_clean_error_not_a_panic() {
+        let err = read_capped(&[0xff, 0xfe][..]).unwrap_err().to_string();
+        assert!(err.contains("UTF-8"), "unexpected message: {err}");
     }
 
     #[test]

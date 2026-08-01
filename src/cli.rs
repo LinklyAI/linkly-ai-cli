@@ -23,6 +23,13 @@ pub struct Cli {
     /// Output in JSON format
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Distinguish "no results" from "failed" in the exit code: 0 = results,
+    /// 1 = ran fine but matched nothing, 2 = failed. Without this flag any
+    /// successful run exits 0 and any failure exits 1 (the historical
+    /// behaviour), so existing scripts keep working.
+    #[arg(long, global = true)]
+    pub exit_code: bool,
 }
 
 /// Connection parameters for commands that talk to the Linkly AI server.
@@ -111,8 +118,8 @@ pub enum Command {
         #[arg(long, value_parser = ["default", "newest", "oldest"])]
         time_sort: Option<String>,
 
-        /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to local markdown card notes and IGNORES --library and --path-glob
-        #[arg(long, value_parser = ["folder", "notes"])]
+        /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to local markdown card notes and IGNORES --library and --path-glob. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
+        #[arg(long)]
         scope: Option<String>,
 
         /// Filter by note tags (comma-separated, AND semantics). Leading '#' is stripped and ASCII lowercased. Most useful with --scope notes
@@ -204,8 +211,8 @@ pub enum Command {
 
     /// Enumerate a container (currently: notes)
     List {
-        /// Container scope to list. Required. Currently only 'notes' is accepted
-        #[arg(long, value_parser = ["notes"])]
+        /// Container scope to list. Required. 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
+        #[arg(long)]
         scope: String,
 
         /// Filter by tags (comma-separated, AND semantics)
@@ -336,8 +343,19 @@ mod tests {
     fn list_requires_a_scope() {
         assert!(parse(&["list"]).is_err());
         assert!(parse(&["list", "--scope", "notes"]).is_ok());
-        // Unknown scopes are rejected at the CLI layer.
-        assert!(parse(&["list", "--scope", "folder"]).is_err());
+    }
+
+    #[test]
+    fn scope_values_are_not_frozen_at_the_cli_layer() {
+        // The desktop deliberately leaves `scope` unconstrained in its schema so
+        // that adding a scope doesn't require every client to ship a new build
+        // first (see schemas.rs on ListInput::scope). A `value_parser` enum here
+        // would reintroduce exactly that: `list --scope folder` would be refused
+        // locally the moment the desktop starts supporting it. Validation is the
+        // server's job — it answers with a message naming the supported values.
+        assert!(parse(&["list", "--scope", "folder"]).is_ok());
+        assert!(parse(&["list", "--scope", "some-future-scope"]).is_ok());
+        assert!(parse(&["search", "q", "--scope", "some-future-scope"]).is_ok());
     }
 
     #[test]
@@ -351,10 +369,21 @@ mod tests {
     }
 
     #[test]
-    fn search_scope_accepts_only_folder_and_notes() {
+    fn search_scope_accepts_the_documented_values() {
         assert!(parse(&["search", "q", "--scope", "notes"]).is_ok());
         assert!(parse(&["search", "q", "--scope", "folder"]).is_ok());
-        assert!(parse(&["search", "q", "--scope", "libraries"]).is_err());
+    }
+
+    #[test]
+    fn closed_value_sets_are_still_enforced_locally() {
+        // Unlike `scope`, these are bounded choices rather than a growing set —
+        // a detail level, a write mode, a sort direction. The desktop is not
+        // going to add a fourth `--image-text` tier, so catching a typo here
+        // beats a round-trip.
+        assert!(parse(&["read", "local://1", "--image-text", "inline"]).is_err());
+        assert!(parse(&["note-save", "--mode", "upsert", "--content", "x"]).is_err());
+        assert!(parse(&["list", "--scope", "notes", "--sort", "sideways"]).is_err());
+        assert!(parse(&["search", "q", "--time-sort", "sideways"]).is_err());
     }
 
     #[test]
@@ -363,6 +392,24 @@ mod tests {
             assert!(parse(&["read", "local://1", "--image-text", level]).is_ok());
         }
         assert!(parse(&["read", "local://1", "--image-text", "inline"]).is_err());
+    }
+
+    #[test]
+    fn exit_code_is_a_global_opt_in_flag() {
+        // Off by default: a plain run keeps the historical 0-on-success /
+        // 1-on-failure contract that existing scripts depend on.
+        assert!(!parse(&["search", "q"]).expect("parse").exit_code);
+        assert!(
+            parse(&["search", "q", "--exit-code"])
+                .expect("parse")
+                .exit_code
+        );
+        // global = true, so it works before or after the subcommand.
+        assert!(
+            parse(&["--exit-code", "list", "--scope", "notes"])
+                .expect("parse")
+                .exit_code
+        );
     }
 
     #[test]

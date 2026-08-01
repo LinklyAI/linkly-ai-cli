@@ -19,6 +19,7 @@ use outcome::Outcome;
 async fn main() {
     let cli = Cli::parse();
     let json_mode = cli.json;
+    let exit_code_mode = cli.exit_code;
 
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
@@ -41,14 +42,19 @@ async fn main() {
         }
     }
 
+    // Exit-code semantics are opt-in. Historically every successful run exited
+    // 0 and every failure exited 1; making "found nothing" exit 1 by default
+    // would silently repurpose that value and break existing scripts — the ones
+    // testing `$? -eq 1` for failure, and the `set -e` ones that would now abort
+    // on an empty search. `--exit-code` opts into the grep convention instead,
+    // the same way `git diff --exit-code` does.
     match result {
-        // 0 when the command produced results, 1 when it definitively found
-        // nothing — see `outcome` for why "nothing" is only ever reported when
-        // we can actually tell.
         Ok(outcome) => {
-            let code = outcome.exit_code();
-            if code != 0 {
-                std::process::exit(code);
+            if exit_code_mode {
+                let code = outcome.exit_code();
+                if code != 0 {
+                    std::process::exit(code);
+                }
             }
         }
         Err(e) => {
@@ -60,9 +66,9 @@ async fn main() {
             if !msg.is_empty() {
                 eprintln!("Error: {}", msg);
             }
-            // 2 = the command failed, kept distinct from 1 = ran fine but
-            // matched nothing.
-            std::process::exit(2);
+            // Under --exit-code, 2 keeps failures distinct from 1 = matched
+            // nothing. Without it, 1 is the historical "something went wrong".
+            std::process::exit(if exit_code_mode { 2 } else { 1 });
         }
     }
 }
