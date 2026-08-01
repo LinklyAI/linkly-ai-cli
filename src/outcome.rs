@@ -57,7 +57,13 @@ pub enum ResultShape {
 /// second-guess, because the CLI is the one that asked for that format.
 pub fn classify(content: &str, shape: ResultShape, json_mode: bool) -> Outcome {
     if json_mode {
-        return classify_json(content, shape).unwrap_or(Outcome::Found);
+        if let Some(outcome) = classify_json(content, shape) {
+            return outcome;
+        }
+        // Asking for JSON does not guarantee getting it: the cloud gateway
+        // returns its "No results found for …" sentence as plain text even in
+        // JSON mode. Fall through to the markdown rules before giving up, so a
+        // cloud miss is still reported as empty.
     }
     classify_markdown(content, shape).unwrap_or(Outcome::Found)
 }
@@ -92,8 +98,15 @@ fn classify_markdown(content: &str, shape: ResultShape) -> Option<Outcome> {
         // "Showing top 3 of 42 results for \"query\"" — the *total* is what
         // matters, not the page size.
         ResultShape::Search => count_after(content, " of ", " results")?,
-        // "Found 5 matches in 1 documents for `pattern`"
-        ResultShape::Grep => count_after(content, "Found ", " matches")?,
+        // Two renderings, and only the default one has the "Found" header:
+        //   output_mode=content → "Found 5 matches in 1 documents for `p`"
+        //   output_mode=count   → per-doc lines, then "Total: 5 matches in 1 documents"
+        // The count mode is the one scripts reach for as an existence check, so
+        // missing it would defeat the exit code exactly where it matters most.
+        ResultShape::Grep => match count_after(content, "Found ", " matches") {
+            Some(count) => count,
+            None => count_after(content, "Total: ", " matches")?,
+        },
         // "Found 2 folder(s), 940 files total." — the empty case prints a
         // dedicated sentence with no count at all, so a missing header here is
         // itself the signal.
@@ -201,6 +214,38 @@ mod tests {
         // Page size 3 but 42 total — still Found.
         let found = "# Search Results\n\nShowing top 3 of 42 results for \"x\"\n";
         assert_eq!(classify(found, ResultShape::Search, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_grep_count_mode_uses_the_total_line() {
+        // `--mode count` renders no "Found N matches" header at all — it ends
+        // with a "Total:" summary instead.
+        let empty = "# Grep Results\n\n\nTotal: 0 matches in 0 documents\n";
+        assert_eq!(classify(empty, ResultShape::Grep, false), Outcome::Empty);
+
+        let found = "# Grep Results\n\nlocal://1  A doc  3\n\nTotal: 3 matches in 1 documents\n";
+        assert_eq!(classify(found, ResultShape::Grep, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_grep_content_mode_with_matches_is_found() {
+        let body = "# Grep Results\n\nFound 5 matches in 2 documents for `x`\n";
+        assert_eq!(classify(body, ResultShape::Grep, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_list_with_notes_is_found() {
+        let body = "# Notes\n\nShowing 10 of 37 notes (sort: recent, offset: 0) — target: notes\n";
+        assert_eq!(classify(body, ResultShape::List, false), Outcome::Found);
+    }
+
+    #[test]
+    fn json_mode_falls_back_to_markdown_rules_for_plain_text() {
+        // The cloud gateway answers an empty search with plain text even when
+        // JSON was requested. Without the fallback this would classify as
+        // Found and exit 0 on a genuine miss.
+        let body = "No results found for \"zzz\"";
+        assert_eq!(classify(body, ResultShape::Search, true), Outcome::Empty);
     }
 
     #[test]

@@ -54,9 +54,12 @@ pub async fn run(
     if no_snippet {
         args["snippet"] = serde_json::json!(false);
     }
-    if json_mode {
-        args["output_format"] = serde_json::json!("json");
-    }
+    // `list` is the one tool whose server-side default is JSON, not markdown
+    // (a notes item is a CAS handle, which has no compact line rendering). Every
+    // other command can omit `output_format` and get markdown; omitting it here
+    // would print raw JSON to a terminal and, worse, leave the outcome
+    // classifier parsing JSON with markdown rules. So always be explicit.
+    args["output_format"] = serde_json::json!(if json_mode { "json" } else { "markdown" });
 
     match client.call_tool("list", args, conn).await {
         Ok(content) => {

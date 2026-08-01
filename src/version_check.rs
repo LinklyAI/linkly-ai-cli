@@ -81,24 +81,45 @@ pub fn check_desktop_version(version: &str) -> Result<(), VersionGap> {
 mod tests {
     use super::*;
 
-    /// The floor without its `-beta.0` sentinel — the label users are shown.
-    /// Derived rather than hardcoded so bumping the constant can't leave these
-    /// tests asserting a stale version while still passing.
-    fn floor_label() -> &'static str {
-        MIN_DESKTOP_VERSION_FOR_FULL_FEATURES.trim_end_matches("-beta.0")
+    /// The floor label, hardcoded on purpose.
+    ///
+    /// Deriving it from `MIN_DESKTOP_VERSION_FOR_FULL_FEATURES` would make
+    /// these assertions vacuous — test and production would compute the same
+    /// (possibly wrong) string from the same source and always agree. Spelling
+    /// it out means bumping the constant turns these tests red, which is the
+    /// reminder to also update the feature description below.
+    const EXPECTED_FLOOR: &str = "0.10.0";
+
+    #[test]
+    fn floor_label_matches_the_constant() {
+        // The one place the two are compared, so a malformed constant (missing
+        // or misspelled `-beta.0` sentinel) is caught here rather than silently
+        // weakening every other assertion.
+        assert_eq!(
+            MIN_DESKTOP_VERSION_FOR_FULL_FEATURES,
+            format!("{}-beta.0", EXPECTED_FLOOR)
+        );
     }
 
     #[test]
     fn old_stable_desktop_triggers_warning() {
         let gap = check_desktop_version("0.4.0").unwrap_err();
         assert_eq!(gap.actual, "0.4.0");
-        assert_eq!(gap.required, floor_label());
-        assert_eq!(gap.missing_features, FEATURES_REQUIRING_MIN_DESKTOP);
+        assert_eq!(gap.required, EXPECTED_FLOOR);
+        // Assert on the *content* of the message, not on "the field equals the
+        // constant that was assigned to it" — the bug this whole check exists
+        // to prevent is a bumped version paired with a stale feature list.
+        assert!(gap.missing_features.contains("note"));
+        assert!(gap.missing_features.contains("image-text"));
+        assert!(
+            !gap.missing_features.contains("find_paths"),
+            "feature list still advertises find_paths, which shipped long before the current floor"
+        );
     }
 
     #[test]
     fn desktop_at_or_above_the_floor_passes() {
-        assert!(check_desktop_version(floor_label()).is_ok());
+        assert!(check_desktop_version(EXPECTED_FLOOR).is_ok());
         assert!(check_desktop_version("99.0.0").is_ok());
     }
 
@@ -107,8 +128,8 @@ mod tests {
         // X.Y.Z-beta.1 > X.Y.Z-beta.0 (the sentinel) so a beta user on the
         // targeted release line is treated as up to date — they already have
         // the new tools.
-        assert!(check_desktop_version(&format!("{}-beta.1", floor_label())).is_ok());
-        assert!(check_desktop_version(&format!("{}-beta.6", floor_label())).is_ok());
+        assert!(check_desktop_version("0.10.0-beta.1").is_ok());
+        assert!(check_desktop_version("0.10.0-beta.6").is_ok());
     }
 
     #[test]
