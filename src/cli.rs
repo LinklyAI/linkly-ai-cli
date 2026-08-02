@@ -13,7 +13,7 @@ Community: https://linkly.ai/docs/en/community";
 #[command(
     name = "linkly",
     version,
-    about = "Linkly AI — search your local documents from the terminal",
+    about = "Linkly AI — search your documents and take notes from the terminal",
     after_help = AFTER_HELP
 )]
 pub struct Cli {
@@ -43,7 +43,12 @@ pub struct ConnectionArgs {
     #[arg(long, requires = "endpoint")]
     pub token: Option<String>,
 
-    /// Connect via remote tunnel (https://mcp.linkly.ai)
+    /// Reach your Desktop through the remote tunnel (https://mcp.linkly.ai)
+    /// instead of over the local network. Requires Pro, and your Desktop must
+    /// be online — the tunnel forwards to it, it is not a copy of your data in
+    /// the cloud. Cloud libraries are the exception: they are served by the
+    /// cloud itself, so `--library cloud://owner/slug` works even when Desktop
+    /// is offline. Notes always live on the Desktop machine.
     #[arg(long, conflicts_with_all = ["endpoint", "token"])]
     pub remote: bool,
 }
@@ -211,7 +216,9 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Enumerate a container (currently: notes)
+    /// Enumerate a container (currently: notes). Notes live on the Desktop
+    /// machine — with --remote this reads them through the tunnel, and there is
+    /// no cloud notes store to fall back on when Desktop is offline
     List {
         /// Container scope to list. Required. 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
         #[arg(long, value_hint = clap::ValueHint::Other)]
@@ -241,7 +248,10 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Create or rewrite a local markdown note
+    /// Create or rewrite a markdown note in your Desktop's Notes folder. With
+    /// --remote the write still lands on that machine, forwarded through the
+    /// tunnel — notes are never stored in the cloud, so there is no cloud
+    /// library to target and none to fall back on when Desktop is offline
     NoteSave {
         /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id, --base-version and --tags together)
         #[arg(long, value_parser = ["create", "edit"])]
