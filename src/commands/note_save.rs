@@ -106,8 +106,10 @@ pub async fn run(
 ///
 /// Both are required together because an edit is a compare-and-swap:
 /// `note_id` says which note and `base_version` says which revision the
-/// caller read. `--tags` is NOT required: the note body's inline #tokens are
-/// the source of truth for tags, and the parameter can only add to them.
+/// caller read. `--tags` is not enforced here: under the body-#tag model
+/// (desktop #171, unreleased) it is genuinely optional, and released
+/// Desktops that still require it on edit reject the request server-side
+/// with a message naming the field — loud, and correct for both worlds.
 fn missing_edit_fields(
     mode: &str,
     note_id: Option<&str>,
@@ -127,11 +129,13 @@ fn missing_edit_fields(
 }
 
 /// Normalize `--tags`, rejecting a provided-but-empty set instead of silently
-/// dropping it. `--tags ""` used to mean "clear all tags" under the old
-/// full-replacement model; under the additive model (Desktop ≥ 0.10.1) that
-/// intent cannot be honored at all — an error that says so beats writing the
-/// note with half the caller's intent discarded. Same rule as `search`/`list`:
-/// an explicit `--tags` with no usable value is a caller mistake.
+/// dropping it. Under every released Desktop (full-replacement model) an empty
+/// set means "delete every tag" — almost never what a caller who typed
+/// `--tags "$VAR"` with an empty variable intended; under the future additive
+/// model (desktop #171) an empty set is meaningless. Neither should proceed
+/// silently, so this errors before anything is read or sent. Same rule as
+/// `search`/`list`: an explicit `--tags` with no usable value is a caller
+/// mistake.
 fn validate_tags(tags: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
     match tags {
         None => Ok(None),
@@ -139,8 +143,9 @@ fn validate_tags(tags: Option<Vec<String>>) -> Result<Option<Vec<String>>, Strin
             let tags = normalize_tags(tags);
             if tags.is_empty() {
                 Err(
-                    "--tags was given but contains no usable tag. --tags can only add tags — \
-                     to remove a tag, delete its #token from the note content."
+                    "--tags was given but contains no usable tag. Pass at least one tag \
+                     (on edit, the full set to keep — released Desktops replace the whole \
+                     set), or omit the flag."
                         .to_string(),
                 )
             } else {
@@ -258,9 +263,12 @@ mod tests {
 
     #[test]
     fn an_edit_without_tags_passes_validation() {
-        // Since Desktop 0.10.1 the note body's inline #tokens are the source
-        // of truth for tags and the `tags` parameter can only add — an edit
-        // that doesn't touch tags legitimately omits the flag entirely.
+        // Under the body-#tag model (desktop #171, not yet released) inline
+        // #tokens are the source of truth and `tags` can only add, so an edit
+        // that doesn't touch tags legitimately omits the flag. Released
+        // Desktops still REQUIRE tags on edit — they reject the request
+        // server-side with a message naming the field, which is the desired
+        // failure mode (loud, not a silent tag wipe).
         assert!(missing_edit_fields("edit", Some("uuid"), Some("sha")).is_empty());
     }
 
@@ -274,14 +282,14 @@ mod tests {
 
     #[test]
     fn an_explicitly_empty_tag_set_is_an_error_not_a_silent_no_op() {
-        // `--tags ""` used to clear tags under the full-replacement model.
-        // Under the additive model that intent can't be honored — the note
-        // must NOT be written with the flag silently dropped (exit 0 with no
-        // machine-readable signal). The error also names the actual way to
-        // remove a tag.
+        // On released (full-replacement) Desktops `--tags ""` on edit means
+        // "delete every tag" — a foot-gun when the value came from an empty
+        // shell variable; under the future additive model (#171) it is
+        // meaningless. Either way the note must NOT be written with the flag
+        // silently dropped (exit 0 with no machine-readable signal).
         let err = validate_tags(Some(vec!["".to_string()])).unwrap_err();
-        assert!(err.contains("#token"), "unexpected message: {err}");
         assert!(err.contains("--tags"), "unexpected message: {err}");
+        assert!(err.contains("omit the flag"), "unexpected message: {err}");
     }
 
     #[test]

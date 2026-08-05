@@ -295,7 +295,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         base_version: Option<String>,
 
-        /// Extra tags to add (comma-separated). Optional for both modes; unioned with the note body's inline #tags. Cannot remove tags — delete a #token from the content instead. Requires Desktop >= 0.10.1 (enforced on local/LAN connections); older Desktops treated this as the FULL replacement set, and --remote cannot verify the Desktop version
+        /// Note tags, comma-separated. CAUTION: every released Desktop treats this as the FULL replacement set on edit (tags you omit are deleted) and requires it there. The additive body-#tag model (desktop #171) has not shipped yet — once it does, this only adds tags and edits may omit it
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 

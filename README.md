@@ -172,10 +172,10 @@ linkly note-save --mode edit --note-id <uuid> --base-version <hash> --content "N
 | `--content <text>`      | Markdown body without YAML front matter; `-` reads it from stdin               |
 | `--note-id <uuid>`      | Which note to edit (from `linkly list --scope notes`)                          |
 | `--base-version <hash>` | The version you read (compare-and-swap; from the same `list`)                  |
-| `--tags <list>`         | Extra tags to add (additive; delete a `#token` from the content to remove one) |
+| `--tags <list>`         | Note tags (see the caution below before using this on edit)                    |
 | `--app-name <name>`     | Hosting application's display name, shown as the note's source badge           |
 
-Inline `#tags` in the body are the note's tag set. Edits are compare-and-swap: a stale `--base-version` is rejected — re-read, merge, retry. Requires Desktop >= 0.10.1.
+Edits are compare-and-swap: a stale `--base-version` is rejected — re-read, merge, retry. Caution on `--tags`: released Desktops require it on edit and treat it as the **full replacement set** (tags you omit are deleted); the additive body-`#tag` model (desktop #171) has not shipped yet. Requires Desktop >= 0.11.0.
 
 ### Check Status
 
