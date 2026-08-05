@@ -231,7 +231,7 @@ pub enum Command {
         library: Option<String>,
 
         /// Absolute directory path to list (--scope folder, or inside a local library). An address, not a glob — if you only know a fuzzy name, run `linkly find-paths` first
-        #[arg(long, value_hint = clap::ValueHint::AnyPath)]
+        #[arg(long, value_hint = clap::ValueHint::DirPath)]
         path: Option<String>,
 
         /// Filter by document types (comma-separated, e.g. pdf,md,docx) — --scope folder/library only
@@ -250,7 +250,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
-        /// Maximum items to return (default: 50, max: 200; max 50 unless --no-snippet)
+        /// Maximum items to return (default: 50, max: 200). Capped at 50 while snippets are on — the notes default; folder/library default to snippets off and page up to 200 (see --snippet / --no-snippet)
         #[arg(long)]
         limit: Option<usize>,
 
@@ -295,7 +295,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         base_version: Option<String>,
 
-        /// Extra tags to add (comma-separated). Optional for both modes; unioned with the note body's inline #tags. Cannot remove tags — delete a #token from the content instead. Caution: Desktops without the body-#tag model treat this as the FULL replacement set (tags you omit are deleted)
+        /// Extra tags to add (comma-separated). Optional for both modes; unioned with the note body's inline #tags. Cannot remove tags — delete a #token from the content instead. Requires Desktop >= 0.10.1 (enforced on local/LAN connections); older Desktops treated this as the FULL replacement set, and --remote cannot verify the Desktop version
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
@@ -449,6 +449,52 @@ mod tests {
         assert!(parse(&["note-save", "--mode", "upsert", "--content", "x"]).is_err());
         assert!(parse(&["list", "--scope", "notes", "--sort", "sideways"]).is_err());
         assert!(parse(&["search", "q", "--time-sort", "sideways"]).is_err());
+    }
+
+    #[test]
+    fn list_snippet_flags_are_mutually_exclusive() {
+        // Tri-state contract (list.rs): --snippet forces on, --no-snippet
+        // forces off, neither defers to the server's per-scope default.
+        // Passing both has no coherent meaning and must fail at parse time —
+        // this locks the `conflicts_with` relation against a field rename.
+        assert!(parse(&["list", "--scope", "folder", "--snippet", "--no-snippet"]).is_err());
+        assert!(parse(&["list", "--scope", "folder", "--snippet"]).is_ok());
+        assert!(parse(&["list", "--scope", "folder", "--no-snippet"]).is_ok());
+    }
+
+    #[test]
+    fn list_comma_separated_flags_split_into_lists() {
+        // `value_delimiter` is load-bearing: without it "pdf,md" would reach
+        // the desktop as one bogus doc type and be rejected server-side.
+        let cli = parse(&[
+            "list", "--scope", "folder", "--type", "pdf,md", "--tags", "a,b",
+        ])
+        .expect("parse");
+        let Command::List { r#type, tags, .. } = cli.command else {
+            panic!("expected List, got something else");
+        };
+        assert_eq!(r#type.unwrap(), vec!["pdf", "md"]);
+        assert_eq!(tags.unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn list_accepts_the_pr2_filter_flags() {
+        // The five folder/library flags must all parse; the per-scope validity
+        // matrix is the desktop's to enforce, not clap's.
+        assert!(parse(&[
+            "list",
+            "--scope",
+            "library",
+            "--library",
+            "local://1",
+            "--path",
+            "/Users/me/docs",
+            "--modified-after",
+            "2024-01-01",
+            "--modified-before",
+            "2024-12-31",
+        ])
+        .is_ok());
     }
 
     #[test]

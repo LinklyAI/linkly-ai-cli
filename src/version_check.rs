@@ -25,13 +25,20 @@ use semver::Version;
 /// so any beta of the targeted release passes. Desktop's release script
 /// never emits `-beta.0` (numbering starts at `-beta.1`), making this a
 /// safe synthetic floor.
-pub const MIN_DESKTOP_VERSION_FOR_FULL_FEATURES: &str = "0.10.0-beta.0";
+pub const MIN_DESKTOP_VERSION_FOR_FULL_FEATURES: &str = "0.10.1-beta.0";
 
 /// Plain-English description of what the CLI started using at the
 /// version above. Surfaced verbatim in the warning so the user
 /// understands what they're missing.
+///
+/// 0.10.1 is also the release where `note_save.tags` switched from
+/// full-replacement to additive (body #tokens became the source of
+/// truth) — gating on it keeps this CLI's additive `--tags` from ever
+/// reaching a full-replacement Desktop, where a partial tag list would
+/// silently delete the tags it omits.
 pub const FEATURES_REQUIRING_MIN_DESKTOP: &str =
-    "the note tools (list / note-save), search --scope and --tags, and read --image-text";
+    "list --scope folder/library (with --path, --library, --type and --modified-after/-before), \
+     note-save --app-name, and note-save's additive --tags model";
 
 /// What we found when comparing the Desktop version against the floor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +95,7 @@ mod tests {
     /// (possibly wrong) string from the same source and always agree. Spelling
     /// it out means bumping the constant turns these tests red, which is the
     /// reminder to also update the feature description below.
-    const EXPECTED_FLOOR: &str = "0.10.0";
+    const EXPECTED_FLOOR: &str = "0.10.1";
 
     #[test]
     fn floor_label_matches_the_constant() {
@@ -109,11 +116,16 @@ mod tests {
         // Assert on the *content* of the message, not on "the field equals the
         // constant that was assigned to it" — the bug this whole check exists
         // to prevent is a bumped version paired with a stale feature list.
-        assert!(gap.missing_features.contains("note"));
-        assert!(gap.missing_features.contains("image-text"));
+        assert!(gap.missing_features.contains("folder/library"));
+        assert!(gap.missing_features.contains("--app-name"));
+        assert!(gap.missing_features.contains("additive --tags"));
         assert!(
             !gap.missing_features.contains("find_paths"),
             "feature list still advertises find_paths, which shipped long before the current floor"
+        );
+        assert!(
+            !gap.missing_features.contains("image-text"),
+            "feature list still advertises read --image-text, which shipped at 0.10.0, before the current floor"
         );
     }
 
@@ -128,8 +140,8 @@ mod tests {
         // X.Y.Z-beta.1 > X.Y.Z-beta.0 (the sentinel) so a beta user on the
         // targeted release line is treated as up to date — they already have
         // the new tools.
-        assert!(check_desktop_version("0.10.0-beta.1").is_ok());
-        assert!(check_desktop_version("0.10.0-beta.6").is_ok());
+        assert!(check_desktop_version("0.10.1-beta.1").is_ok());
+        assert!(check_desktop_version("0.10.1-beta.6").is_ok());
     }
 
     #[test]
@@ -144,7 +156,13 @@ mod tests {
     fn releases_below_the_floor_warn() {
         assert!(check_desktop_version("0.3.5").is_err());
         assert!(check_desktop_version("0.1.0").is_err());
-        // The note tools landed in desktop 0.10.0; 0.9.x must still warn.
+        // The three-scope list / app_name / additive-tags surface landed in
+        // desktop 0.10.1. 0.10.0 has the note tools but the OLD
+        // full-replacement `tags` semantics — letting it through would turn
+        // this CLI's additive `--tags` into a silent tag wipe, so it must
+        // warn (and its betas too: 0.10.0-beta.N < 0.10.1-beta.0).
+        assert!(check_desktop_version("0.10.0").is_err());
+        assert!(check_desktop_version("0.10.0-beta.6").is_err());
         assert!(check_desktop_version("0.9.1").is_err());
     }
 

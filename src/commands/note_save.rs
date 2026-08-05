@@ -41,6 +41,10 @@ pub async fn run(
     app_name: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
+    // Every argument-only check runs BEFORE `--content -` consumes stdin: a
+    // flag error discovered after the read would have already drained the
+    // pipe, destroying input the producer may not be able to regenerate.
+
     // `edit` needs both together. Checked here (not just server-side) so
     // the message can name the missing flags in CLI spelling.
     let missing = missing_edit_fields(mode, note_id.as_deref(), base_version.as_deref());
@@ -53,6 +57,15 @@ pub async fn run(
             json_mode,
         );
     }
+
+    let tags = match validate_tags(tags) {
+        Ok(tags) => tags,
+        Err(msg) => return output::print_error(&msg, json_mode),
+    };
+    let app_name = match validate_app_name(app_name) {
+        Ok(app_name) => app_name,
+        Err(msg) => return output::print_error(&msg, json_mode),
+    };
 
     let body = match read_content(content) {
         Ok(body) => body,
@@ -74,34 +87,9 @@ pub async fn run(
         args["base_version"] = serde_json::json!(version);
     }
     if let Some(tags) = tags {
-        let tags = normalize_tags(tags);
-        if tags.is_empty() {
-            // An emptied set is deliberately NOT sent. Under the additive
-            // model (post-#171 Desktop) `[]` is a no-op, but a
-            // full-replacement Desktop would silently CLEAR every tag —
-            // and the two can't be told apart by version number yet.
-            // Omitting the field is safe against both: additive desktops
-            // proceed unchanged, full-replacement desktops reject the edit
-            // loudly instead of wiping tags.
-            eprintln!(
-                "Warning: --tags is empty and was not sent. --tags can only add tags — \
-                 to remove a tag, delete its #token from the note content."
-            );
-        } else {
-            args["tags"] = serde_json::json!(tags);
-        }
+        args["tags"] = serde_json::json!(tags);
     }
     if let Some(app_name) = app_name {
-        // Trimmed here only so `--app-name "  "` doesn't send an all-blank
-        // value; real validation (length cap, control chars, reserved
-        // names) is the desktop's (#183, tools/note_save.rs).
-        let app_name = app_name.trim();
-        if app_name.is_empty() {
-            return output::print_error(
-                "--app-name cannot be blank. Pass the hosting application's display name, or omit the flag.",
-                json_mode,
-            );
-        }
         args["app_name"] = serde_json::json!(app_name);
     }
 
@@ -136,6 +124,51 @@ fn missing_edit_fields(
         missing.push("--base-version");
     }
     missing
+}
+
+/// Normalize `--tags`, rejecting a provided-but-empty set instead of silently
+/// dropping it. `--tags ""` used to mean "clear all tags" under the old
+/// full-replacement model; under the additive model (Desktop ≥ 0.10.1) that
+/// intent cannot be honored at all — an error that says so beats writing the
+/// note with half the caller's intent discarded. Same rule as `search`/`list`:
+/// an explicit `--tags` with no usable value is a caller mistake.
+fn validate_tags(tags: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+    match tags {
+        None => Ok(None),
+        Some(tags) => {
+            let tags = normalize_tags(tags);
+            if tags.is_empty() {
+                Err(
+                    "--tags was given but contains no usable tag. --tags can only add tags — \
+                     to remove a tag, delete its #token from the note content."
+                        .to_string(),
+                )
+            } else {
+                Ok(Some(tags))
+            }
+        }
+    }
+}
+
+/// Trim `--app-name` and reject an all-blank value; real validation (length
+/// cap, control chars, reserved names) is the desktop's (#183,
+/// tools/note_save.rs).
+fn validate_app_name(app_name: Option<String>) -> Result<Option<String>, String> {
+    match app_name {
+        None => Ok(None),
+        Some(name) => {
+            let name = name.trim();
+            if name.is_empty() {
+                Err(
+                    "--app-name cannot be blank. Pass the hosting application's display name, \
+                     or omit the flag."
+                        .to_string(),
+                )
+            } else {
+                Ok(Some(name.to_string()))
+            }
+        }
+    }
 }
 
 /// Resolve `--content`, reading stdin when it is the `-` sentinel.
@@ -237,5 +270,36 @@ mod tests {
         // be diverted to a stdin read (which would block on a TTY).
         assert_eq!(read_content("a - b").unwrap(), "a - b");
         assert_eq!(read_content("--").unwrap(), "--");
+    }
+
+    #[test]
+    fn an_explicitly_empty_tag_set_is_an_error_not_a_silent_no_op() {
+        // `--tags ""` used to clear tags under the full-replacement model.
+        // Under the additive model that intent can't be honored — the note
+        // must NOT be written with the flag silently dropped (exit 0 with no
+        // machine-readable signal). The error also names the actual way to
+        // remove a tag.
+        let err = validate_tags(Some(vec!["".to_string()])).unwrap_err();
+        assert!(err.contains("#token"), "unexpected message: {err}");
+        assert!(err.contains("--tags"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn tags_are_normalized_and_empty_entries_dropped() {
+        assert_eq!(
+            validate_tags(Some(vec!["a".into(), "".into(), "b".into()])).unwrap(),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(validate_tags(None).unwrap(), None);
+    }
+
+    #[test]
+    fn blank_app_name_is_rejected_and_valid_one_is_trimmed() {
+        assert!(validate_app_name(Some("   ".into())).is_err());
+        assert_eq!(
+            validate_app_name(Some("  Cursor ".into())).unwrap(),
+            Some("Cursor".to_string())
+        );
+        assert_eq!(validate_app_name(None).unwrap(), None);
     }
 }
