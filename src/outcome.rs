@@ -47,7 +47,9 @@ pub enum ResultShape {
     Grep,
     /// `find_paths` — JSON `directories` array, markdown `Found N folder(s)`.
     FindPaths,
-    /// `list` — JSON `items` array, markdown `Showing N of M notes`.
+    /// `list` — JSON `total` (falling back to the `items` array for desktops
+    /// that don't emit it), markdown `Showing N of M notes` (scope=notes) or
+    /// `Showing N of M files` (scope=folder/library).
     List,
 }
 
@@ -75,7 +77,14 @@ fn classify_json(content: &str, shape: ResultShape) -> Option<Outcome> {
         ResultShape::Search => value.get("total")?.as_u64()? == 0,
         ResultShape::Grep => value.get("total_matches")?.as_u64()? == 0,
         ResultShape::FindPaths => value.get("directories")?.as_array()?.is_empty(),
-        ResultShape::List => value.get("items")?.as_array()?.is_empty(),
+        // The TOTAL decides, same as the markdown path (and `search`): with
+        // `offset` past the end, `items` is empty while the filtered set is
+        // not — that page must still exit 0. `items` is only a fallback for
+        // desktops that don't emit `total`.
+        ResultShape::List => match value.get("total").and_then(|t| t.as_u64()) {
+            Some(total) => total == 0,
+            None => value.get("items")?.as_array()?.is_empty(),
+        },
     };
     Some(if empty {
         Outcome::Empty
@@ -115,8 +124,15 @@ fn classify_markdown(content: &str, shape: ResultShape) -> Option<Outcome> {
             None if content.contains("No folder candidates matched") => 0,
             None => return None,
         },
-        // "Showing 10 of 37 notes (sort: recent, offset: 0) — target: …"
-        ResultShape::List => count_after(content, " of ", " notes")?,
+        // Two renderings by scope, same shape:
+        //   notes          → "Showing 10 of 37 notes (sort: recent, offset: 0) — target: …"
+        //   folder/library → "Showing 50 of 214 files (sort: recent, offset: 0) — target: …"
+        // Without the second arm, folder/library results would fall through to
+        // the lenient default and --exit-code would degrade to always-Found.
+        ResultShape::List => match count_after(content, " of ", " notes") {
+            Some(count) => count,
+            None => count_after(content, " of ", " files")?,
+        },
     };
     Some(if count == 0 {
         Outcome::Empty
@@ -185,6 +201,22 @@ mod tests {
                 true
             ),
             Outcome::Found
+        );
+    }
+
+    #[test]
+    fn json_list_total_governs_not_the_page() {
+        // offset past the end: the page is empty but the filtered set isn't.
+        // The markdown rendering of the same query reads the total ("Showing
+        // 0 of 214 files") — the JSON path must agree, or --exit-code flips
+        // between output formats.
+        let past_end = r#"{"scope":"folder","total":214,"items":[]}"#;
+        assert_eq!(classify(past_end, ResultShape::List, true), Outcome::Found);
+
+        let truly_empty = r#"{"scope":"folder","total":0,"items":[]}"#;
+        assert_eq!(
+            classify(truly_empty, ResultShape::List, true),
+            Outcome::Empty
         );
     }
 
@@ -286,6 +318,29 @@ mod tests {
     fn markdown_list_zero_notes_is_empty() {
         let body = "# Notes\n\nShowing 0 of 0 notes (sort: recent, offset: 0) — target: notes\n";
         assert_eq!(classify(body, ResultShape::List, false), Outcome::Empty);
+    }
+
+    #[test]
+    fn markdown_list_empty_page_of_nonempty_total_is_found() {
+        // Same offset-past-the-end shape as the JSON test above: the total
+        // (214) decides, not the page size (0).
+        let body =
+            "# Files\n\nShowing 0 of 214 files (sort: recent, offset: 5000) — target: /Users/me\n";
+        assert_eq!(classify(body, ResultShape::List, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_list_files_header_is_recognised() {
+        // scope=folder/library renders "files" where notes renders "notes"
+        // (#141 PR-2); both must classify, or folder/library listings would
+        // silently lose their exit-code semantics.
+        let found =
+            "# Files\n\nShowing 50 of 214 files (sort: recent, offset: 0) — target: /Users/me\n";
+        assert_eq!(classify(found, ResultShape::List, false), Outcome::Found);
+
+        let empty =
+            "# Files\n\nShowing 0 of 0 files (sort: recent, offset: 0) — target: /Users/me\n";
+        assert_eq!(classify(empty, ResultShape::List, false), Outcome::Empty);
     }
 
     // ── Failing towards Found ────────────────────────────

@@ -216,15 +216,37 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Enumerate a container (currently: notes). Notes live on the Desktop
-    /// machine — with --remote this reads them through the tunnel, and there is
-    /// no cloud notes store to fall back on when Desktop is offline
+    /// Enumerate a container without full-text matching: indexed files under a
+    /// directory (--scope folder), one library's files (--scope library), or
+    /// your notes (--scope notes). Notes live on the Desktop machine — with
+    /// --remote this reads them through the tunnel, and there is no cloud
+    /// notes store to fall back on when Desktop is offline
     List {
-        /// Container scope to list. Required. 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
+        /// Container scope to list. Required. 'folder' lists indexed files under a directory (omit --path to sweep all watched roots), 'library' lists one library's files (requires --library), 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
         #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: String,
 
-        /// Filter by tags (comma-separated, AND semantics)
+        /// Which library to list (--scope library only; required there). A plain name or local://<id>; see `linkly list-libraries`
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        library: Option<String>,
+
+        /// Absolute directory path to list (--scope folder, or inside a local library). An address, not a glob — if you only know a fuzzy name, run `linkly find-paths` first
+        #[arg(long, value_hint = clap::ValueHint::AnyPath)]
+        path: Option<String>,
+
+        /// Filter by document types (comma-separated, e.g. pdf,md,docx) — --scope folder/library only
+        #[arg(long, value_delimiter = ',')]
+        r#type: Option<Vec<String>>,
+
+        /// Inclusive lower bound on file modification time (ISO 8601 UTC, bare date or RFC 3339) — --scope folder/library only
+        #[arg(long)]
+        modified_after: Option<String>,
+
+        /// Inclusive upper bound on file modification time (same format) — --scope folder/library only
+        #[arg(long)]
+        modified_before: Option<String>,
+
+        /// Filter by tags (comma-separated, AND semantics) — --scope notes only
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
@@ -240,6 +262,10 @@ pub enum Command {
         #[arg(long, value_parser = ["recent", "oldest", "name"])]
         sort: Option<String>,
 
+        /// Attach a per-item snippet even where the scope default is off (folder/library; from the indexed abstract). Caps --limit at 50
+        #[arg(long, conflicts_with = "no_snippet")]
+        snippet: bool,
+
         /// Omit per-item snippets, allowing --limit above 50
         #[arg(long)]
         no_snippet: bool,
@@ -253,7 +279,7 @@ pub enum Command {
     /// tunnel — notes are never stored in the cloud, so there is no cloud
     /// library to target and none to fall back on when Desktop is offline
     NoteSave {
-        /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id, --base-version and --tags together)
+        /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id and --base-version together)
         #[arg(long, value_parser = ["create", "edit"])]
         mode: String,
 
@@ -269,9 +295,13 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         base_version: Option<String>,
 
-        /// Tags (comma-separated). Optional on create; on edit this is the FULL replacement set
+        /// Extra tags to add (comma-separated). Optional for both modes; unioned with the note body's inline #tags. Cannot remove tags — delete a #token from the content instead. Caution: Desktops without the body-#tag model treat this as the FULL replacement set (tags you omit are deleted)
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
+
+        /// Display name of the application driving this call (e.g. 'Claude Code'), shown as the note's source badge in the app. Not the model name; omit if unsure. Max 64 chars (desktop-enforced)
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        app_name: Option<String>,
 
         #[command(flatten)]
         conn: ConnectionArgs,

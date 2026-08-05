@@ -38,21 +38,16 @@ pub async fn run(
     note_id: Option<String>,
     base_version: Option<String>,
     tags: Option<Vec<String>>,
+    app_name: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
-    // `edit` needs all three together. Checked here (not just server-side) so
+    // `edit` needs both together. Checked here (not just server-side) so
     // the message can name the missing flags in CLI spelling.
-    let missing = missing_edit_fields(
-        mode,
-        note_id.as_deref(),
-        base_version.as_deref(),
-        tags.as_deref(),
-    );
+    let missing = missing_edit_fields(mode, note_id.as_deref(), base_version.as_deref());
     if !missing.is_empty() {
         return output::print_error(
             &format!(
-                "--mode edit requires {} (get --note-id and --base-version from `linkly list --scope notes`).\n\
-                 Note: --tags is the FULL replacement set — pass back every tag the note should keep.",
+                "--mode edit requires {} (get both from `linkly list --scope notes`).",
                 missing.join(", ")
             ),
             json_mode,
@@ -79,10 +74,35 @@ pub async fn run(
         args["base_version"] = serde_json::json!(version);
     }
     if let Some(tags) = tags {
-        // Distinct from search/list: an explicit empty tag set is meaningful on
-        // edit (it clears every tag), so an emptied list is forwarded as `[]`
-        // rather than rejected. `--tags ""` is how you strip a note's tags.
-        args["tags"] = serde_json::json!(normalize_tags(tags));
+        let tags = normalize_tags(tags);
+        if tags.is_empty() {
+            // An emptied set is deliberately NOT sent. Under the additive
+            // model (post-#171 Desktop) `[]` is a no-op, but a
+            // full-replacement Desktop would silently CLEAR every tag —
+            // and the two can't be told apart by version number yet.
+            // Omitting the field is safe against both: additive desktops
+            // proceed unchanged, full-replacement desktops reject the edit
+            // loudly instead of wiping tags.
+            eprintln!(
+                "Warning: --tags is empty and was not sent. --tags can only add tags — \
+                 to remove a tag, delete its #token from the note content."
+            );
+        } else {
+            args["tags"] = serde_json::json!(tags);
+        }
+    }
+    if let Some(app_name) = app_name {
+        // Trimmed here only so `--app-name "  "` doesn't send an all-blank
+        // value; real validation (length cap, control chars, reserved
+        // names) is the desktop's (#183, tools/note_save.rs).
+        let app_name = app_name.trim();
+        if app_name.is_empty() {
+            return output::print_error(
+                "--app-name cannot be blank. Pass the hosting application's display name, or omit the flag.",
+                json_mode,
+            );
+        }
+        args["app_name"] = serde_json::json!(app_name);
     }
 
     match client.call_tool("note_save", args, conn).await {
@@ -96,15 +116,14 @@ pub async fn run(
 /// Which of the edit-only flags are missing. Empty for `create`, and empty for
 /// a complete `edit`.
 ///
-/// All three are required together because an edit is a compare-and-swap:
-/// `note_id` says which note, `base_version` says which revision the caller
-/// read, and `tags` is a full replacement set that would otherwise be silently
-/// cleared.
+/// Both are required together because an edit is a compare-and-swap:
+/// `note_id` says which note and `base_version` says which revision the
+/// caller read. `--tags` is NOT required: the note body's inline #tokens are
+/// the source of truth for tags, and the parameter can only add to them.
 fn missing_edit_fields(
     mode: &str,
     note_id: Option<&str>,
     base_version: Option<&str>,
-    tags: Option<&[String]>,
 ) -> Vec<&'static str> {
     if mode != "edit" {
         return Vec::new();
@@ -115,9 +134,6 @@ fn missing_edit_fields(
     }
     if base_version.is_none() {
         missing.push("--base-version");
-    }
-    if tags.is_none() {
-        missing.push("--tags");
     }
     missing
 }
@@ -188,38 +204,31 @@ mod tests {
 
     #[test]
     fn create_never_requires_the_edit_only_flags() {
-        assert!(missing_edit_fields("create", None, None, None).is_empty());
+        assert!(missing_edit_fields("create", None, None).is_empty());
     }
 
     #[test]
-    fn edit_requires_all_three_flags_together() {
+    fn edit_requires_note_id_and_base_version_together() {
         assert_eq!(
-            missing_edit_fields("edit", None, None, None),
-            vec!["--note-id", "--base-version", "--tags"]
+            missing_edit_fields("edit", None, None),
+            vec!["--note-id", "--base-version"]
         );
     }
 
     #[test]
     fn edit_reports_only_what_is_actually_missing() {
-        let tags = vec!["work".to_string()];
         assert_eq!(
-            missing_edit_fields("edit", Some("uuid"), None, Some(&tags)),
+            missing_edit_fields("edit", Some("uuid"), None),
             vec!["--base-version"]
         );
     }
 
     #[test]
-    fn a_complete_edit_passes_validation() {
-        let tags = vec!["work".to_string()];
-        assert!(missing_edit_fields("edit", Some("uuid"), Some("sha"), Some(&tags)).is_empty());
-    }
-
-    #[test]
-    fn an_explicitly_empty_tag_set_still_counts_as_provided() {
-        // `--tags ""` is how a caller strips every tag from a note; it must not
-        // be reported as a missing flag.
-        let empty: Vec<String> = Vec::new();
-        assert!(missing_edit_fields("edit", Some("uuid"), Some("sha"), Some(&empty)).is_empty());
+    fn an_edit_without_tags_passes_validation() {
+        // Since Desktop 0.10.1 the note body's inline #tokens are the source
+        // of truth for tags and the `tags` parameter can only add — an edit
+        // that doesn't touch tags legitimately omits the flag entirely.
+        assert!(missing_edit_fields("edit", Some("uuid"), Some("sha")).is_empty());
     }
 
     #[test]

@@ -97,7 +97,9 @@ pub async fn run(
 /// - `Ok(Some(normalized))` when every type is valid (lowercased, order preserved)
 /// - `Err(message)` listing the unknown type(s) and the supported set, ready to
 ///   surface to the user
-fn validate_doc_types(doc_types: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+pub(crate) fn validate_doc_types(
+    doc_types: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, String> {
     let Some(types) = doc_types else {
         return Ok(None);
     };
