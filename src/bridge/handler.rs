@@ -749,4 +749,34 @@ mod tests {
         let bogus = serde_json::json!({ "scope": "notes", "totally_made_up": 1 });
         assert!(serde_json::from_value::<ListInput>(bogus).is_err());
     }
+
+    // Null-vs-omitted contract for every ListInput optional (mirrors desktop's
+    // `list_input_optionals_accept_null_and_omission`): minimax/qwen-family
+    // clients serialize unset optionals as explicit `null`, and the bridge
+    // must accept — and then omit — all of them, PR-2's five included.
+    #[test]
+    fn list_input_optionals_accept_explicit_null() {
+        let json = serde_json::json!({
+            "scope": "folder",
+            "library": null,
+            "path": null,
+            "doc_types": null,
+            "tags": null,
+            "modified_after": null,
+            "modified_before": null,
+            "sort": null,
+            "snippet": null,
+            "limit": null,
+            "offset": null,
+            "output_format": null
+        });
+        let parsed: ListInput = serde_json::from_value(json).expect("all-null optionals parse");
+        let value = serde_json::to_value(&parsed).unwrap();
+        let obj = value.as_object().unwrap();
+        assert_eq!(
+            obj.keys().collect::<Vec<_>>(),
+            vec!["scope"],
+            "null optionals must be dropped from the forwarded args, got: {obj:?}"
+        );
+    }
 }
