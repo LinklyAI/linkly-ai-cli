@@ -38,30 +38,14 @@ pub async fn run(
 
     let mut args = serde_json::json!({ "query": query });
 
-    if let Some(limit) = limit {
-        args["limit"] = serde_json::json!(limit);
-    }
-    if let Some(types) = doc_types {
-        args["doc_types"] = serde_json::json!(types);
-    }
-    if let Some(lib) = library {
-        args["library"] = serde_json::json!(lib);
-    }
-    if let Some(glob) = path_glob {
-        args["path_glob"] = serde_json::json!(glob);
-    }
-    if let Some(after) = modified_after {
-        args["modified_after"] = serde_json::json!(after);
-    }
-    if let Some(before) = modified_before {
-        args["modified_before"] = serde_json::json!(before);
-    }
-    if let Some(sort) = time_sort {
-        args["time_sort"] = serde_json::json!(sort);
-    }
-    if let Some(scope) = scope {
-        args["scope"] = serde_json::json!(scope);
-    }
+    crate::commands::set_optional_arg(&mut args, "limit", limit);
+    crate::commands::set_optional_arg(&mut args, "doc_types", doc_types);
+    crate::commands::set_optional_arg(&mut args, "library", library);
+    crate::commands::set_optional_arg(&mut args, "path_glob", path_glob);
+    crate::commands::set_optional_arg(&mut args, "modified_after", modified_after);
+    crate::commands::set_optional_arg(&mut args, "modified_before", modified_before);
+    crate::commands::set_optional_arg(&mut args, "time_sort", time_sort);
+    crate::commands::set_optional_arg(&mut args, "scope", scope);
     if let Some(tags) = tags {
         // An explicit `--tags` with no usable value is a caller mistake, not an
         // empty filter: sending `[]` would silently widen the search back to
@@ -97,7 +81,9 @@ pub async fn run(
 /// - `Ok(Some(normalized))` when every type is valid (lowercased, order preserved)
 /// - `Err(message)` listing the unknown type(s) and the supported set, ready to
 ///   surface to the user
-fn validate_doc_types(doc_types: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+pub(crate) fn validate_doc_types(
+    doc_types: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, String> {
     let Some(types) = doc_types else {
         return Ok(None);
     };

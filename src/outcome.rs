@@ -47,7 +47,9 @@ pub enum ResultShape {
     Grep,
     /// `find_paths` — JSON `directories` array, markdown `Found N folder(s)`.
     FindPaths,
-    /// `list` — JSON `items` array, markdown `Showing N of M notes`.
+    /// `list` — JSON `total` (falling back to the `items` array for desktops
+    /// that don't emit it), markdown `Showing N of M notes` (scope=notes) or
+    /// `Showing N of M files` (scope=folder/library).
     List,
 }
 
@@ -75,7 +77,14 @@ fn classify_json(content: &str, shape: ResultShape) -> Option<Outcome> {
         ResultShape::Search => value.get("total")?.as_u64()? == 0,
         ResultShape::Grep => value.get("total_matches")?.as_u64()? == 0,
         ResultShape::FindPaths => value.get("directories")?.as_array()?.is_empty(),
-        ResultShape::List => value.get("items")?.as_array()?.is_empty(),
+        // The TOTAL decides, same as the markdown path (and `search`): with
+        // `offset` past the end, `items` is empty while the filtered set is
+        // not — that page must still exit 0. `items` is only a fallback for
+        // desktops that don't emit `total`.
+        ResultShape::List => match value.get("total").and_then(|t| t.as_u64()) {
+            Some(total) => total == 0,
+            None => value.get("items")?.as_array()?.is_empty(),
+        },
     };
     Some(if empty {
         Outcome::Empty
@@ -97,26 +106,37 @@ fn classify_markdown(content: &str, shape: ResultShape) -> Option<Outcome> {
     let count = match shape {
         // "Showing top 3 of 42 results for \"query\"" — the *total* is what
         // matters, not the page size.
-        ResultShape::Search => count_after(content, " of ", " results")?,
+        ResultShape::Search => count_after(content, "Showing top ", " of ", " results")?,
         // Two renderings, and only the default one has the "Found" header:
         //   output_mode=content → "Found 5 matches in 1 documents for `p`"
         //   output_mode=count   → per-doc lines, then "Total: 5 matches in 1 documents"
         // The count mode is the one scripts reach for as an existence check, so
         // missing it would defeat the exit code exactly where it matters most.
-        ResultShape::Grep => match count_after(content, "Found ", " matches") {
+        ResultShape::Grep => match count_after(content, "Found ", "Found ", " matches") {
             Some(count) => count,
-            None => count_after(content, "Total: ", " matches")?,
+            None => count_after(content, "Total: ", "Total: ", " matches")?,
         },
         // "Found 2 folder(s), 940 files total." — the empty case prints a
         // dedicated sentence with no count at all, so a missing header here is
         // itself the signal.
-        ResultShape::FindPaths => match count_after(content, "Found ", " folder(s)") {
+        ResultShape::FindPaths => match count_after(content, "Found ", "Found ", " folder(s)") {
             Some(count) => count,
             None if content.contains("No folder candidates matched") => 0,
             None => return None,
         },
-        // "Showing 10 of 37 notes (sort: recent, offset: 0) — target: …"
-        ResultShape::List => count_after(content, " of ", " notes")?,
+        // Two renderings by scope, same shape:
+        //   notes          → "Showing 10 of 37 notes (sort: recent, offset: 0) — target: …"
+        //   folder/library → "Showing 50 of 214 files (sort: recent, offset: 0) — target: …"
+        // Without the second arm, folder/library results would fall through to
+        // the lenient default and --exit-code would degrade to always-Found.
+        // Both arms are anchored to the "Showing " header: the notes arm runs
+        // first over the whole body, so without the anchor a folder listing
+        // containing a file named e.g. "Summary of 0 notes.md" would satisfy
+        // the notes pattern from an ITEM line and report a false Empty.
+        ResultShape::List => match count_after(content, "Showing ", " of ", " notes") {
+            Some(count) => count,
+            None => count_after(content, "Showing ", " of ", " files")?,
+        },
     };
     Some(if count == 0 {
         Outcome::Empty
@@ -126,9 +146,18 @@ fn classify_markdown(content: &str, shape: ResultShape) -> Option<Outcome> {
 }
 
 /// Extract the integer sitting between `prefix` and `suffix` on the first line
-/// that contains both, in that order.
-fn count_after(content: &str, prefix: &str, suffix: &str) -> Option<u64> {
+/// that **starts with** `anchor` and contains both, in that order.
+///
+/// The anchor is what keeps user-controlled text out of the parse: item lines
+/// echo file names, note snippets and matched document lines verbatim, so a
+/// free scan over the whole body would let a file named "Summary of 0
+/// notes.md" pose as a count header. Desktop headers start the line
+/// ("Showing …", "Found …", "Total: …"); item renderings never do.
+fn count_after(content: &str, anchor: &str, prefix: &str, suffix: &str) -> Option<u64> {
     for line in content.lines() {
+        if !line.starts_with(anchor) {
+            continue;
+        }
         let Some(rest) = line.split_once(prefix).map(|(_, rest)| rest) else {
             continue;
         };
@@ -185,6 +214,22 @@ mod tests {
                 true
             ),
             Outcome::Found
+        );
+    }
+
+    #[test]
+    fn json_list_total_governs_not_the_page() {
+        // offset past the end: the page is empty but the filtered set isn't.
+        // The markdown rendering of the same query reads the total ("Showing
+        // 0 of 214 files") — the JSON path must agree, or --exit-code flips
+        // between output formats.
+        let past_end = r#"{"scope":"folder","total":214,"items":[]}"#;
+        assert_eq!(classify(past_end, ResultShape::List, true), Outcome::Found);
+
+        let truly_empty = r#"{"scope":"folder","total":0,"items":[]}"#;
+        assert_eq!(
+            classify(truly_empty, ResultShape::List, true),
+            Outcome::Empty
         );
     }
 
@@ -286,6 +331,59 @@ mod tests {
     fn markdown_list_zero_notes_is_empty() {
         let body = "# Notes\n\nShowing 0 of 0 notes (sort: recent, offset: 0) — target: notes\n";
         assert_eq!(classify(body, ResultShape::List, false), Outcome::Empty);
+    }
+
+    #[test]
+    fn markdown_list_empty_page_of_nonempty_total_is_found() {
+        // Same offset-past-the-end shape as the JSON test above: the total
+        // (214) decides, not the page size (0).
+        let body =
+            "# Files\n\nShowing 0 of 214 files (sort: recent, offset: 5000) — target: /Users/me\n";
+        assert_eq!(classify(body, ResultShape::List, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_list_files_header_is_recognised() {
+        // scope=folder/library renders "files" where notes renders "notes"
+        // (#141 PR-2); both must classify, or folder/library listings would
+        // silently lose their exit-code semantics.
+        let found =
+            "# Files\n\nShowing 50 of 214 files (sort: recent, offset: 0) — target: /Users/me\n";
+        assert_eq!(classify(found, ResultShape::List, false), Outcome::Found);
+
+        let empty =
+            "# Files\n\nShowing 0 of 0 files (sort: recent, offset: 0) — target: /Users/me\n";
+        assert_eq!(classify(empty, ResultShape::List, false), Outcome::Empty);
+    }
+
+    #[test]
+    fn markdown_list_item_lines_cannot_hijack_the_count() {
+        // A folder listing echoes user file names verbatim. A file whose name
+        // happens to contain " of 0 notes" must not satisfy the notes-header
+        // pattern and turn a 214-file listing into exit 1 — only the
+        // line-initial "Showing …" header carries the count.
+        let body = "# Files\n\n\
+                    Showing 50 of 214 files (sort: recent, offset: 0) — target: /Users/me\n\n\
+                    - Summary of 0 notes.md (/Users/me/docs)\n";
+        assert_eq!(classify(body, ResultShape::List, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_list_poisoned_item_without_a_header_fails_towards_found() {
+        // No recognisable header at all: the poisoned item line must not be
+        // parsed in its place. Unparseable → Found, per the module contract.
+        let body = "# Files\n\n- Summary of 0 notes.md (/Users/me/docs)\n";
+        assert_eq!(classify(body, ResultShape::List, false), Outcome::Found);
+    }
+
+    #[test]
+    fn markdown_grep_matched_lines_cannot_hijack_the_count() {
+        // grep echoes matched document lines; a document that *contains* the
+        // header phrasing mid-line must not override the real header above it.
+        let body = "# Grep Results\n\n\
+                    Found 2 matches in 1 documents for `notes`\n\n\
+                    12: …they said Found 0 matches in 0 documents somewhere…\n";
+        assert_eq!(classify(body, ResultShape::Grep, false), Outcome::Found);
     }
 
     // ── Failing towards Found ────────────────────────────

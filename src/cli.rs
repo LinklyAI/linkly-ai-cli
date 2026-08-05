@@ -216,19 +216,41 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Enumerate a container (currently: notes). Notes live on the Desktop
-    /// machine — with --remote this reads them through the tunnel, and there is
-    /// no cloud notes store to fall back on when Desktop is offline
+    /// Enumerate a container without full-text matching: indexed files under a
+    /// directory (--scope folder), one library's files (--scope library), or
+    /// your notes (--scope notes). Notes live on the Desktop machine — with
+    /// --remote this reads them through the tunnel, and there is no cloud
+    /// notes store to fall back on when Desktop is offline
     List {
-        /// Container scope to list. Required. 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
+        /// Container scope to list. Required. 'folder' lists indexed files under a directory (omit --path to sweep all watched roots), 'library' lists one library's files (requires --library), 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
         #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: String,
 
-        /// Filter by tags (comma-separated, AND semantics)
+        /// Which library to list (--scope library only; required there). A plain name or local://<id>; see `linkly list-libraries`
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        library: Option<String>,
+
+        /// Absolute directory path to list (--scope folder, or inside a local library). An address, not a glob — if you only know a fuzzy name, run `linkly find-paths` first
+        #[arg(long, value_hint = clap::ValueHint::DirPath)]
+        path: Option<String>,
+
+        /// Filter by document types (comma-separated, e.g. pdf,md,docx) — --scope folder/library only
+        #[arg(long, value_delimiter = ',')]
+        r#type: Option<Vec<String>>,
+
+        /// Inclusive lower bound on file modification time (ISO 8601 UTC, bare date or RFC 3339) — --scope folder/library only
+        #[arg(long)]
+        modified_after: Option<String>,
+
+        /// Inclusive upper bound on file modification time (same format) — --scope folder/library only
+        #[arg(long)]
+        modified_before: Option<String>,
+
+        /// Filter by tags (comma-separated, AND semantics) — --scope notes only
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
-        /// Maximum items to return (default: 50, max: 200; max 50 unless --no-snippet)
+        /// Maximum items to return (default: 50, max: 200). Capped at 50 while snippets are on — the notes default; folder/library default to snippets off and page up to 200 (see --snippet / --no-snippet)
         #[arg(long)]
         limit: Option<usize>,
 
@@ -239,6 +261,10 @@ pub enum Command {
         /// Sort order: 'recent' (default), 'oldest', or 'name'
         #[arg(long, value_parser = ["recent", "oldest", "name"])]
         sort: Option<String>,
+
+        /// Attach a per-item snippet even where the scope default is off (folder/library; from the indexed abstract). Caps --limit at 50
+        #[arg(long, conflicts_with = "no_snippet")]
+        snippet: bool,
 
         /// Omit per-item snippets, allowing --limit above 50
         #[arg(long)]
@@ -253,7 +279,7 @@ pub enum Command {
     /// tunnel — notes are never stored in the cloud, so there is no cloud
     /// library to target and none to fall back on when Desktop is offline
     NoteSave {
-        /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id, --base-version and --tags together)
+        /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id and --base-version together)
         #[arg(long, value_parser = ["create", "edit"])]
         mode: String,
 
@@ -269,9 +295,13 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         base_version: Option<String>,
 
-        /// Tags (comma-separated). Optional on create; on edit this is the FULL replacement set
+        /// Note tags, comma-separated. CAUTION: every released Desktop treats this as the FULL replacement set on edit (tags you omit are deleted) and requires it there. The additive body-#tag model (desktop #171) has not shipped yet — once it does, this only adds tags and edits may omit it
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
+
+        /// Display name of the application driving this call (e.g. 'Claude Code'), shown as the note's source badge in the app. Not the model name; omit if unsure. Max 64 chars (desktop-enforced)
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        app_name: Option<String>,
 
         #[command(flatten)]
         conn: ConnectionArgs,
@@ -419,6 +449,52 @@ mod tests {
         assert!(parse(&["note-save", "--mode", "upsert", "--content", "x"]).is_err());
         assert!(parse(&["list", "--scope", "notes", "--sort", "sideways"]).is_err());
         assert!(parse(&["search", "q", "--time-sort", "sideways"]).is_err());
+    }
+
+    #[test]
+    fn list_snippet_flags_are_mutually_exclusive() {
+        // Tri-state contract (list.rs): --snippet forces on, --no-snippet
+        // forces off, neither defers to the server's per-scope default.
+        // Passing both has no coherent meaning and must fail at parse time —
+        // this locks the `conflicts_with` relation against a field rename.
+        assert!(parse(&["list", "--scope", "folder", "--snippet", "--no-snippet"]).is_err());
+        assert!(parse(&["list", "--scope", "folder", "--snippet"]).is_ok());
+        assert!(parse(&["list", "--scope", "folder", "--no-snippet"]).is_ok());
+    }
+
+    #[test]
+    fn list_comma_separated_flags_split_into_lists() {
+        // `value_delimiter` is load-bearing: without it "pdf,md" would reach
+        // the desktop as one bogus doc type and be rejected server-side.
+        let cli = parse(&[
+            "list", "--scope", "folder", "--type", "pdf,md", "--tags", "a,b",
+        ])
+        .expect("parse");
+        let Command::List { r#type, tags, .. } = cli.command else {
+            panic!("expected List, got something else");
+        };
+        assert_eq!(r#type.unwrap(), vec!["pdf", "md"]);
+        assert_eq!(tags.unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn list_accepts_the_pr2_filter_flags() {
+        // The five folder/library flags must all parse; the per-scope validity
+        // matrix is the desktop's to enforce, not clap's.
+        assert!(parse(&[
+            "list",
+            "--scope",
+            "library",
+            "--library",
+            "local://1",
+            "--path",
+            "/Users/me/docs",
+            "--modified-after",
+            "2024-01-01",
+            "--modified-before",
+            "2024-12-31",
+        ])
+        .is_ok());
     }
 
     #[test]

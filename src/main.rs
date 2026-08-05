@@ -219,17 +219,39 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         }
         Command::List {
             scope,
+            library,
+            path,
+            r#type,
+            modified_after,
+            modified_before,
             tags,
             limit,
             offset,
             sort,
+            snippet,
             no_snippet,
             conn,
         } => {
             let conn = resolve_conn(&conn)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::list::run(
-                &client, &conn, &scope, tags, limit, offset, sort, no_snippet, json_mode,
+                &client,
+                &conn,
+                commands::list::ListParams {
+                    scope,
+                    library,
+                    path,
+                    doc_types: r#type,
+                    modified_after,
+                    modified_before,
+                    tags,
+                    limit,
+                    offset,
+                    sort,
+                    snippet,
+                    no_snippet,
+                },
+                json_mode,
             )
             .await
         }
@@ -239,6 +261,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             note_id,
             base_version,
             tags,
+            app_name,
             conn,
         } => {
             let conn = resolve_conn(&conn)?;
@@ -251,6 +274,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
                 note_id,
                 base_version,
                 tags,
+                app_name,
                 json_mode,
             )
             .await

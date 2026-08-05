@@ -25,13 +25,25 @@ use semver::Version;
 /// so any beta of the targeted release passes. Desktop's release script
 /// never emits `-beta.0` (numbering starts at `-beta.1`), making this a
 /// safe synthetic floor.
-pub const MIN_DESKTOP_VERSION_FOR_FULL_FEATURES: &str = "0.10.0-beta.0";
+pub const MIN_DESKTOP_VERSION_FOR_FULL_FEATURES: &str = "0.11.0-beta.0";
 
 /// Plain-English description of what the CLI started using at the
 /// version above. Surfaced verbatim in the warning so the user
 /// understands what they're missing.
+///
+/// 0.11.0 is where the desktop shipped the three-scope `list` contract
+/// (#141 PR-2) and `note_save.app_name` (#183) — verified against the
+/// desktop tags: both landed first in v0.11.0-beta.1.
+///
+/// NOT covered by this floor: the additive body-#tag `--tags` model
+/// (desktop #171). It has not shipped in ANY desktop release — every
+/// released desktop treats `note_save.tags` as the full replacement set
+/// and requires it on edit — so there is no version number to gate on.
+/// When #171 ships, bump this floor to that release; until then the
+/// `--tags` help carries the full-replacement caution.
 pub const FEATURES_REQUIRING_MIN_DESKTOP: &str =
-    "the note tools (list / note-save), search --scope and --tags, and read --image-text";
+    "list --scope folder/library (with --path, --library, --type and \
+     --modified-after/-before) and note-save --app-name";
 
 /// What we found when comparing the Desktop version against the floor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +100,7 @@ mod tests {
     /// (possibly wrong) string from the same source and always agree. Spelling
     /// it out means bumping the constant turns these tests red, which is the
     /// reminder to also update the feature description below.
-    const EXPECTED_FLOOR: &str = "0.10.0";
+    const EXPECTED_FLOOR: &str = "0.11.0";
 
     #[test]
     fn floor_label_matches_the_constant() {
@@ -109,11 +121,20 @@ mod tests {
         // Assert on the *content* of the message, not on "the field equals the
         // constant that was assigned to it" — the bug this whole check exists
         // to prevent is a bumped version paired with a stale feature list.
-        assert!(gap.missing_features.contains("note"));
-        assert!(gap.missing_features.contains("image-text"));
+        assert!(gap.missing_features.contains("folder/library"));
+        assert!(gap.missing_features.contains("--app-name"));
+        assert!(
+            !gap.missing_features.contains("additive"),
+            "the additive --tags model (desktop #171) has not shipped in any release — \
+             advertising it as a floor feature would claim a guarantee no version provides"
+        );
         assert!(
             !gap.missing_features.contains("find_paths"),
             "feature list still advertises find_paths, which shipped long before the current floor"
+        );
+        assert!(
+            !gap.missing_features.contains("image-text"),
+            "feature list still advertises read --image-text, which shipped at 0.10.0, before the current floor"
         );
     }
 
@@ -128,8 +149,8 @@ mod tests {
         // X.Y.Z-beta.1 > X.Y.Z-beta.0 (the sentinel) so a beta user on the
         // targeted release line is treated as up to date — they already have
         // the new tools.
-        assert!(check_desktop_version("0.10.0-beta.1").is_ok());
-        assert!(check_desktop_version("0.10.0-beta.6").is_ok());
+        assert!(check_desktop_version("0.11.0-beta.1").is_ok());
+        assert!(check_desktop_version("0.11.0-beta.6").is_ok());
     }
 
     #[test]
@@ -144,7 +165,14 @@ mod tests {
     fn releases_below_the_floor_warn() {
         assert!(check_desktop_version("0.3.5").is_err());
         assert!(check_desktop_version("0.1.0").is_err());
-        // The note tools landed in desktop 0.10.0; 0.9.x must still warn.
+        // The three-scope list and app_name surface landed in desktop
+        // v0.11.0-beta.1 (verified via `git tag --contains` on the desktop
+        // repo). 0.10.x has the note tools but none of this branch's new
+        // parameters — its `deny_unknown_fields` would answer
+        // `--scope folder --path …` with a bare "unknown field" instead of
+        // "your Desktop is out of date", so it must be gated.
+        assert!(check_desktop_version("0.10.0").is_err());
+        assert!(check_desktop_version("0.10.1-beta.2").is_err());
         assert!(check_desktop_version("0.9.1").is_err());
     }
 

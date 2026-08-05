@@ -131,6 +131,52 @@ linkly read <doc-id> --offset 50 --limit 100
 | `--offset <N>` | Starting line number (1-based)     |
 | `--limit <N>`  | Number of lines to read (max: 500) |
 
+### List Container Contents
+
+Enumerate a container without full-text matching — indexed files under a directory, one library's files, or your notes:
+
+```bash
+linkly list --scope folder --path /Users/me/docs
+linkly list --scope folder                          # all watched roots
+linkly list --scope library --library "My Library"
+linkly list --scope notes --tags project --json
+```
+
+| Option                           | Description                                                              |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `--scope <s>`                    | Required: `folder`, `library`, or `notes`                                |
+| `--library <ref>`                | Which library to list (`--scope library`; a name or `local://<id>`)      |
+| `--path <dir>`                   | Absolute directory to list (`--scope folder`, or inside a local library) |
+| `--type <list>`                  | Filter by document types, comma-separated (folder/library)               |
+| `--modified-after/-before <t>`   | Modification-time bounds, ISO 8601 UTC (folder/library)                  |
+| `--tags <list>`                  | Filter notes by tags, comma-separated, AND semantics (notes)             |
+| `--sort <s>`                     | `recent` (default), `oldest`, or `name`                                  |
+| `--limit` / `--offset`           | Pagination (default 50, max 200; capped at 50 while snippets are on)     |
+| `--snippet` / `--no-snippet`     | Force per-item snippets on/off (default: notes on, folder/library off)   |
+
+Notes live on the Desktop machine — with `--remote` the listing reaches them through the tunnel; there is no cloud notes store.
+
+### Save a Note
+
+Create or edit a markdown card note in your Desktop's Notes folder:
+
+```bash
+linkly note-save --mode create --content "Remember this #idea"
+echo "Piped body" | linkly note-save --mode create --content -
+linkly note-save --mode edit --note-id <uuid> --base-version <hash> --content "New body #idea"
+```
+
+| Option                  | Description                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `--mode <m>`            | `create` or `edit` (edit requires `--note-id` and `--base-version` together)   |
+| `--content <text>`      | Markdown body without YAML front matter; `-` reads it from stdin               |
+| `--note-id <uuid>`      | Which note to edit (from `linkly list --scope notes`)                          |
+| `--base-version <hash>` | The version you read (compare-and-swap; from the same `list`)                  |
+| `--tags <list>`         | Note tags (see the caution below before using this on edit)                    |
+| `--app-name <name>`     | Hosting application's display name, shown as the note's source badge           |
+
+Edits are compare-and-swap: a stale `--base-version` is rejected — re-read, merge, retry. Caution on `--tags`: released Desktops require it on edit and treat it as the **full replacement set** (tags you omit are deleted); the additive body-`#tag` model (desktop #171) has not shipped yet. Requires Desktop >= 0.11.0.
+
 ### Check Status
 
 ```bash
@@ -214,7 +260,7 @@ linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_la
 
 ## Options
 
-Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
+Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
 
 | Flag               | Scope  | Description                                                                                       |
 | ------------------ | ------ | ------------------------------------------------------------------------------------------------- |

@@ -38,26 +38,34 @@ pub async fn run(
     note_id: Option<String>,
     base_version: Option<String>,
     tags: Option<Vec<String>>,
+    app_name: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
-    // `edit` needs all three together. Checked here (not just server-side) so
+    // Every argument-only check runs BEFORE `--content -` consumes stdin: a
+    // flag error discovered after the read would have already drained the
+    // pipe, destroying input the producer may not be able to regenerate.
+
+    // `edit` needs both together. Checked here (not just server-side) so
     // the message can name the missing flags in CLI spelling.
-    let missing = missing_edit_fields(
-        mode,
-        note_id.as_deref(),
-        base_version.as_deref(),
-        tags.as_deref(),
-    );
+    let missing = missing_edit_fields(mode, note_id.as_deref(), base_version.as_deref());
     if !missing.is_empty() {
         return output::print_error(
             &format!(
-                "--mode edit requires {} (get --note-id and --base-version from `linkly list --scope notes`).\n\
-                 Note: --tags is the FULL replacement set — pass back every tag the note should keep.",
+                "--mode edit requires {} (get both from `linkly list --scope notes`).",
                 missing.join(", ")
             ),
             json_mode,
         );
     }
+
+    let tags = match validate_tags(tags) {
+        Ok(tags) => tags,
+        Err(msg) => return output::print_error(&msg, json_mode),
+    };
+    let app_name = match validate_app_name(app_name) {
+        Ok(app_name) => app_name,
+        Err(msg) => return output::print_error(&msg, json_mode),
+    };
 
     let body = match read_content(content) {
         Ok(body) => body,
@@ -79,10 +87,10 @@ pub async fn run(
         args["base_version"] = serde_json::json!(version);
     }
     if let Some(tags) = tags {
-        // Distinct from search/list: an explicit empty tag set is meaningful on
-        // edit (it clears every tag), so an emptied list is forwarded as `[]`
-        // rather than rejected. `--tags ""` is how you strip a note's tags.
-        args["tags"] = serde_json::json!(normalize_tags(tags));
+        args["tags"] = serde_json::json!(tags);
+    }
+    if let Some(app_name) = app_name {
+        args["app_name"] = serde_json::json!(app_name);
     }
 
     match client.call_tool("note_save", args, conn).await {
@@ -96,15 +104,16 @@ pub async fn run(
 /// Which of the edit-only flags are missing. Empty for `create`, and empty for
 /// a complete `edit`.
 ///
-/// All three are required together because an edit is a compare-and-swap:
-/// `note_id` says which note, `base_version` says which revision the caller
-/// read, and `tags` is a full replacement set that would otherwise be silently
-/// cleared.
+/// Both are required together because an edit is a compare-and-swap:
+/// `note_id` says which note and `base_version` says which revision the
+/// caller read. `--tags` is not enforced here: under the body-#tag model
+/// (desktop #171, unreleased) it is genuinely optional, and released
+/// Desktops that still require it on edit reject the request server-side
+/// with a message naming the field — loud, and correct for both worlds.
 fn missing_edit_fields(
     mode: &str,
     note_id: Option<&str>,
     base_version: Option<&str>,
-    tags: Option<&[String]>,
 ) -> Vec<&'static str> {
     if mode != "edit" {
         return Vec::new();
@@ -116,10 +125,55 @@ fn missing_edit_fields(
     if base_version.is_none() {
         missing.push("--base-version");
     }
-    if tags.is_none() {
-        missing.push("--tags");
-    }
     missing
+}
+
+/// Normalize `--tags`, rejecting a provided-but-empty set instead of silently
+/// dropping it. Under every released Desktop (full-replacement model) an empty
+/// set means "delete every tag" — almost never what a caller who typed
+/// `--tags "$VAR"` with an empty variable intended; under the future additive
+/// model (desktop #171) an empty set is meaningless. Neither should proceed
+/// silently, so this errors before anything is read or sent. Same rule as
+/// `search`/`list`: an explicit `--tags` with no usable value is a caller
+/// mistake.
+fn validate_tags(tags: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
+    match tags {
+        None => Ok(None),
+        Some(tags) => {
+            let tags = normalize_tags(tags);
+            if tags.is_empty() {
+                Err(
+                    "--tags was given but contains no usable tag. Pass at least one tag \
+                     (on edit, the full set to keep — released Desktops replace the whole \
+                     set), or omit the flag."
+                        .to_string(),
+                )
+            } else {
+                Ok(Some(tags))
+            }
+        }
+    }
+}
+
+/// Trim `--app-name` and reject an all-blank value; real validation (length
+/// cap, control chars, reserved names) is the desktop's (#183,
+/// tools/note_save.rs).
+fn validate_app_name(app_name: Option<String>) -> Result<Option<String>, String> {
+    match app_name {
+        None => Ok(None),
+        Some(name) => {
+            let name = name.trim();
+            if name.is_empty() {
+                Err(
+                    "--app-name cannot be blank. Pass the hosting application's display name, \
+                     or omit the flag."
+                        .to_string(),
+                )
+            } else {
+                Ok(Some(name.to_string()))
+            }
+        }
+    }
 }
 
 /// Resolve `--content`, reading stdin when it is the `-` sentinel.
@@ -188,38 +242,34 @@ mod tests {
 
     #[test]
     fn create_never_requires_the_edit_only_flags() {
-        assert!(missing_edit_fields("create", None, None, None).is_empty());
+        assert!(missing_edit_fields("create", None, None).is_empty());
     }
 
     #[test]
-    fn edit_requires_all_three_flags_together() {
+    fn edit_requires_note_id_and_base_version_together() {
         assert_eq!(
-            missing_edit_fields("edit", None, None, None),
-            vec!["--note-id", "--base-version", "--tags"]
+            missing_edit_fields("edit", None, None),
+            vec!["--note-id", "--base-version"]
         );
     }
 
     #[test]
     fn edit_reports_only_what_is_actually_missing() {
-        let tags = vec!["work".to_string()];
         assert_eq!(
-            missing_edit_fields("edit", Some("uuid"), None, Some(&tags)),
+            missing_edit_fields("edit", Some("uuid"), None),
             vec!["--base-version"]
         );
     }
 
     #[test]
-    fn a_complete_edit_passes_validation() {
-        let tags = vec!["work".to_string()];
-        assert!(missing_edit_fields("edit", Some("uuid"), Some("sha"), Some(&tags)).is_empty());
-    }
-
-    #[test]
-    fn an_explicitly_empty_tag_set_still_counts_as_provided() {
-        // `--tags ""` is how a caller strips every tag from a note; it must not
-        // be reported as a missing flag.
-        let empty: Vec<String> = Vec::new();
-        assert!(missing_edit_fields("edit", Some("uuid"), Some("sha"), Some(&empty)).is_empty());
+    fn an_edit_without_tags_passes_validation() {
+        // Under the body-#tag model (desktop #171, not yet released) inline
+        // #tokens are the source of truth and `tags` can only add, so an edit
+        // that doesn't touch tags legitimately omits the flag. Released
+        // Desktops still REQUIRE tags on edit — they reject the request
+        // server-side with a message naming the field, which is the desired
+        // failure mode (loud, not a silent tag wipe).
+        assert!(missing_edit_fields("edit", Some("uuid"), Some("sha")).is_empty());
     }
 
     #[test]
@@ -228,5 +278,36 @@ mod tests {
         // be diverted to a stdin read (which would block on a TTY).
         assert_eq!(read_content("a - b").unwrap(), "a - b");
         assert_eq!(read_content("--").unwrap(), "--");
+    }
+
+    #[test]
+    fn an_explicitly_empty_tag_set_is_an_error_not_a_silent_no_op() {
+        // On released (full-replacement) Desktops `--tags ""` on edit means
+        // "delete every tag" — a foot-gun when the value came from an empty
+        // shell variable; under the future additive model (#171) it is
+        // meaningless. Either way the note must NOT be written with the flag
+        // silently dropped (exit 0 with no machine-readable signal).
+        let err = validate_tags(Some(vec!["".to_string()])).unwrap_err();
+        assert!(err.contains("--tags"), "unexpected message: {err}");
+        assert!(err.contains("omit the flag"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn tags_are_normalized_and_empty_entries_dropped() {
+        assert_eq!(
+            validate_tags(Some(vec!["a".into(), "".into(), "b".into()])).unwrap(),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(validate_tags(None).unwrap(), None);
+    }
+
+    #[test]
+    fn blank_app_name_is_rejected_and_valid_one_is_trimmed() {
+        assert!(validate_app_name(Some("   ".into())).is_err());
+        assert_eq!(
+            validate_app_name(Some("  Cursor ".into())).unwrap(),
+            Some("Cursor".to_string())
+        );
+        assert_eq!(validate_app_name(None).unwrap(), None);
     }
 }
