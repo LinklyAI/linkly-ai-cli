@@ -295,7 +295,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         base_version: Option<String>,
 
-        /// Note tags, comma-separated. CAUTION: every released Desktop treats this as the FULL replacement set on edit (tags you omit are deleted) and requires it there. The additive body-#tag model (desktop #171) has not shipped yet — once it does, this only adds tags and edits may omit it
+        /// Note tags, comma-separated. On Desktop >= 0.11.0 this only ADDS tags (body #tokens are the source of truth; remove a tag by deleting its #token from the content) and edits may omit it. CAUTION: older Desktops treat it as the FULL replacement set on edit (tags you omit are deleted) and require it there
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 

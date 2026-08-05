@@ -32,18 +32,14 @@ pub const MIN_DESKTOP_VERSION_FOR_FULL_FEATURES: &str = "0.11.0-beta.0";
 /// understands what they're missing.
 ///
 /// 0.11.0 is where the desktop shipped the three-scope `list` contract
-/// (#141 PR-2) and `note_save.app_name` (#183) — verified against the
-/// desktop tags: both landed first in v0.11.0-beta.1.
-///
-/// NOT covered by this floor: the additive body-#tag `--tags` model
-/// (desktop #171). It has not shipped in ANY desktop release — every
-/// released desktop treats `note_save.tags` as the full replacement set
-/// and requires it on edit — so there is no version number to gate on.
-/// When #171 ships, bump this floor to that release; until then the
-/// `--tags` help carries the full-replacement caution.
+/// (#141 PR-2), `note_save.app_name` (#183) and the additive body-#tag
+/// `--tags` model (#171/#186: body #tokens are the tag source of truth,
+/// `tags` only adds; earlier desktops require `--tags` on edit and treat
+/// it as the full replacement set).
 pub const FEATURES_REQUIRING_MIN_DESKTOP: &str =
     "list --scope folder/library (with --path, --library, --type and \
-     --modified-after/-before) and note-save --app-name";
+     --modified-after/-before), note-save --app-name, and additive \
+     note-save --tags (body #tokens are the source of truth)";
 
 /// What we found when comparing the Desktop version against the floor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,9 +120,9 @@ mod tests {
         assert!(gap.missing_features.contains("folder/library"));
         assert!(gap.missing_features.contains("--app-name"));
         assert!(
-            !gap.missing_features.contains("additive"),
-            "the additive --tags model (desktop #171) has not shipped in any release — \
-             advertising it as a floor feature would claim a guarantee no version provides"
+            gap.missing_features.contains("additive"),
+            "desktop #171/#186 (additive --tags, shipped with 0.11.0) must be advertised \
+             as a floor feature — pre-0.11 desktops still use full-replacement tags"
         );
         assert!(
             !gap.missing_features.contains("find_paths"),

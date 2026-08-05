@@ -129,13 +129,13 @@ fn missing_edit_fields(
 }
 
 /// Normalize `--tags`, rejecting a provided-but-empty set instead of silently
-/// dropping it. Under every released Desktop (full-replacement model) an empty
+/// dropping it. Under pre-0.11 Desktops (full-replacement model) an empty
 /// set means "delete every tag" — almost never what a caller who typed
-/// `--tags "$VAR"` with an empty variable intended; under the future additive
-/// model (desktop #171) an empty set is meaningless. Neither should proceed
-/// silently, so this errors before anything is read or sent. Same rule as
-/// `search`/`list`: an explicit `--tags` with no usable value is a caller
-/// mistake.
+/// `--tags "$VAR"` with an empty variable intended; under the additive
+/// model (desktop #171, 0.11.0+) an empty set is meaningless. Neither should
+/// proceed silently, so this errors before anything is read or sent. Same
+/// rule as `search`/`list`: an explicit `--tags` with no usable value is a
+/// caller mistake.
 fn validate_tags(tags: Option<Vec<String>>) -> Result<Option<Vec<String>>, String> {
     match tags {
         None => Ok(None),
@@ -282,9 +282,9 @@ mod tests {
 
     #[test]
     fn an_explicitly_empty_tag_set_is_an_error_not_a_silent_no_op() {
-        // On released (full-replacement) Desktops `--tags ""` on edit means
+        // On pre-0.11 (full-replacement) Desktops `--tags ""` on edit means
         // "delete every tag" — a foot-gun when the value came from an empty
-        // shell variable; under the future additive model (#171) it is
+        // shell variable; under the additive model (#171, 0.11.0+) it is
         // meaningless. Either way the note must NOT be written with the flag
         // silently dropped (exit 0 with no machine-readable signal).
         let err = validate_tags(Some(vec!["".to_string()])).unwrap_err();

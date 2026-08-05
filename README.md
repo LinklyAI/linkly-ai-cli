@@ -175,7 +175,7 @@ linkly note-save --mode edit --note-id <uuid> --base-version <hash> --content "N
 | `--tags <list>`         | Note tags (see the caution below before using this on edit)                    |
 | `--app-name <name>`     | Hosting application's display name, shown as the note's source badge           |
 
-Edits are compare-and-swap: a stale `--base-version` is rejected — re-read, merge, retry. Caution on `--tags`: released Desktops require it on edit and treat it as the **full replacement set** (tags you omit are deleted); the additive body-`#tag` model (desktop #171) has not shipped yet. Requires Desktop >= 0.11.0.
+Edits are compare-and-swap: a stale `--base-version` is rejected — re-read, merge, retry. Tags live in the note body as `#tokens` (the source of truth): `--tags` only **adds** tags, and you remove one by deleting its `#token` from the content. Caution: Desktops older than 0.11.0 instead require `--tags` on edit and treat it as the **full replacement set** (tags you omit are deleted). Requires Desktop >= 0.11.0.
 
 ### Check Status
 
