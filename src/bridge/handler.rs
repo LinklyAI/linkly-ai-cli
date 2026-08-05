@@ -402,8 +402,14 @@ pub struct NoteSaveInput {
 
 #[tool_router]
 impl StdioBridgeHandler {
+    // Every read-only tool carries an explicit `read_only_hint = true`: MCP
+    // defaults the hint to false when absent, so annotating only some tools
+    // would tell hint-aware clients (auto-approve read-only, badge writes)
+    // that the unannotated ones are writes — the opposite of the truth.
+    // `note_save` is the single genuine write and says so explicitly.
     #[tool(
         name = "list_libraries",
+        annotations(read_only_hint = true),
         description = "List all available knowledge libraries with descriptions and document counts. Use this to discover libraries before searching within a specific one."
     )]
     async fn list_libraries(
@@ -423,6 +429,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "explore",
+        annotations(read_only_hint = true),
         description = "Get a bird's-eye overview of indexed documents. Returns document type distribution, directory structure with file counts, top keywords (global plus locally-concentrated), and recent activity from the last 7 days. Use this when the user wants to understand what's in their knowledge base before searching, or when they ask for an overview or summary of their documents.\n\nFor a cloud library (`library=\"cloud://owner/slug\"`), also returns the library's README (if present) before the overview.\n\n**Scope**: omit `library` to overview your **local** indexed content (default — Desktop tunnel must be online; cloud libraries are NOT included). Pass `library=\"local://<id>\"` to scope to one local library, or `library=\"cloud://<owner>/<slug>\"` to overview a linked cloud library. To discover which cloud libraries are linked, call `list_libraries` first — then call `explore` once per cloud library you want to inspect."
     )]
     async fn explore(
@@ -443,6 +450,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "find_paths",
+        annotations(read_only_hint = true),
         description = "Locate folder paths in indexed documents by fuzzy keyword match on the directory part of the file path. Returns top folder candidates ordered by file count — pass a distinctive segment of any returned path back to `search` as `path_glob` (substring-matched, so `*xinWeChat*` works as well as a full prefix). Cloud results include the source library reference (`cloud://owner/slug`); pass it as `library` to your follow-up `search` so the glob is scoped to the right backend.\n\nCall BEFORE `search` when the user names a container with a fuzzy or cross-language word (\"in my WeChat\", \"Notion notes\") and the on-disk path is unknown. Pass multiple variants in `patterns` in one call (e.g. [\"WeChat\", \"微信\", \"wxid\"]) — patterns are OR-ed and substring-matched. `limit` caps candidates (default 10, max 50). Skip this tool for pure content queries or file-type filters — call `search` directly.\n\n**Scope**: omit `library` to search paths across your **local** indexed content (default — Desktop tunnel must be online; cloud libraries are NOT included). Pass `library=\"local://<id>\"` to scope to one local library, or `library=\"cloud://<owner>/<slug>\"` to scope to a linked cloud library. To search paths in cloud libraries, call `list_libraries` first to see what is available, then call `find_paths` once per cloud library. Note: cloud libraries with a flat structure (no sub-folders) yield no candidates — use `search` directly instead."
     )]
     async fn find_paths(
@@ -463,6 +471,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "search",
+        annotations(read_only_hint = true),
         description = "[Workflow: search → grep or outline → read] Search indexed documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets.\n\nAfter finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest. When the user names a container by a fuzzy or cross-language word (\"WeChat\", \"Notion notes\"), call `find_paths` first to discover what `path_glob` to pass.\n\n**Scope**: omit `library` to search across your **local** indexed content (default — Desktop tunnel must be online; cloud libraries are NOT included). Pass `library=\"local://<id>\"` to scope to one local library, or `library=\"cloud://<owner>/<slug>\"` to query a linked cloud library. To search across cloud libraries, call `list_libraries` first to see what is available, then call `search` once per cloud library."
     )]
     async fn search(
@@ -483,6 +492,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "outline",
+        annotations(read_only_hint = true),
         description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: only documents with reliable parsed outlines (e.g. Markdown, DOCX with headings, PPTX slide outlines, EPUB table-of-contents outlines) will show structural outlines; for other documents, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
     )]
     async fn outline(
@@ -503,6 +513,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "read",
+        annotations(read_only_hint = true),
         description = "[Workflow: search → grep or outline → read] Read content of a document by its ID. Supports line-based pagination: use `offset` to start from a specific line number and `limit` to control how many lines to read. Returns content with line numbers. Results include a \"Referenced images in shown range\" mapping that resolves markdown image refs to indexed image documents (doc_id + text excerpt); control detail with the optional `image_text` parameter (\"none\" / \"abstract\" / \"full\"). For long documents, prefer using outline or grep first to identify target sections, then read specific ranges."
     )]
     async fn read(
@@ -565,6 +576,7 @@ impl StdioBridgeHandler {
 
     #[tool(
         name = "grep",
+        annotations(read_only_hint = true),
         description = "[Workflow: search → grep or outline → read] Locate specific lines within a single document by regex pattern. Best for documents with has_outline=false where outline is unavailable. Use after 'search' to pinpoint exact positions of names, dates, terms, identifiers, or any pattern — then use 'read' with offset to see full context. Works on all document types, including text derived from images and scanned PDFs (OCR) and from audio and video (transcripts). Requires a doc_id from a previous search result. For searching across multiple documents, call grep once per document."
     )]
     async fn grep(
@@ -656,7 +668,10 @@ mod tests {
     }
 
     // `None` must be omitted from the forwarded arguments, not sent as `null`
-    // — see the comment on FindPathsInput.library.
+    // — see the comment on FindPathsInput.library. Asserted per input struct:
+    // one missing `skip_serializing_if` forwards `"field": null` to a desktop
+    // that declares the field as non-null + `serde(default)` and the call
+    // fails with invalid_params.
     #[test]
     fn unset_optionals_are_omitted_from_forwarded_args() {
         let input: SearchInput =
@@ -667,6 +682,28 @@ mod tests {
             obj.keys().collect::<Vec<_>>(),
             vec!["query"],
             "only `query` should be forwarded, got: {obj:?}"
+        );
+
+        // ListInput carries the most optionals in this file (PR-2 added five).
+        let input: ListInput = serde_json::from_value(serde_json::json!({ "scope": "folder" }))
+            .expect("bare scope parses");
+        let value = serde_json::to_value(&input).unwrap();
+        let obj = value.as_object().unwrap();
+        assert_eq!(
+            obj.keys().collect::<Vec<_>>(),
+            vec!["scope"],
+            "only `scope` should be forwarded, got: {obj:?}"
+        );
+
+        let input: NoteSaveInput =
+            serde_json::from_value(serde_json::json!({ "mode": "create", "content": "x" }))
+                .expect("bare create parses");
+        let value = serde_json::to_value(&input).unwrap();
+        let obj = value.as_object().unwrap();
+        assert_eq!(
+            obj.keys().collect::<Vec<_>>(),
+            vec!["content", "mode"],
+            "only `mode` and `content` should be forwarded, got: {obj:?}"
         );
     }
 
