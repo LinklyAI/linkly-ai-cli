@@ -2,7 +2,7 @@ use anyhow::Result;
 use owo_colors::OwoColorize;
 use serde::Deserialize;
 
-use crate::connection::{ConnectionInfo, RemoteHealthResponse};
+use crate::connection::{ConnectionInfo, ConnectionMode, RemoteHealthResponse};
 use crate::output;
 use crate::version_check;
 
@@ -35,14 +35,27 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let resp = match req.send().await {
         Ok(r) => r,
         Err(_) => {
+            let message = unreachable_message(conn);
             if json_mode {
-                return output::print_error("App not running", json_mode);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "error",
+                        "code": "desktop_unreachable",
+                        "message": message,
+                        "endpoint": conn.base_url,
+                    })
+                );
+                return Err(anyhow::Error::msg(""));
             } else {
                 eprintln!(
-                    "{}\n  {}  Not running",
+                    "{}\n  {}  Unreachable\n  {}  {}",
                     "Linkly AI Status".bold(),
-                    "App:".dimmed()
+                    "App:".dimmed(),
+                    "Endpoint:".dimmed(),
+                    conn.base_url
                 );
+                eprintln!("\n{}", message);
                 anyhow::bail!("");
             }
         }
@@ -153,6 +166,26 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn unreachable_message(conn: &ConnectionInfo) -> String {
+    let retry_failure = match &conn.mode {
+        ConnectionMode::Local => "launch Linkly AI Desktop and try again",
+        ConnectionMode::Lan { .. } => {
+            "confirm Linkly AI Desktop is running on the target machine and try again"
+        }
+        ConnectionMode::Remote => "check your network connection and try again",
+    };
+
+    format!(
+        "The CLI could not reach Linkly AI Desktop. This does not prove that Linkly AI Desktop is stopped.\n\
+         If this command is running inside an AI-agent network sandbox:\n  \
+           1. Use the Linkly MCP integration if it is configured.\n  \
+           2. Otherwise, approve retrying this Linkly CLI command outside the network sandbox.\n\
+         If that retry still fails, {}.\n{}",
+        retry_failure,
+        conn.doctor_hint()
+    )
 }
 
 async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {

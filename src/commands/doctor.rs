@@ -241,13 +241,10 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                 format!("Connection error: {}", e)
             };
             let base_advice = match &conn.mode {
-                ConnectionMode::Local => {
-                    "Make sure Linkly AI Desktop is running on this machine.".to_string()
-                }
-                ConnectionMode::Lan { .. } => {
-                    "Check that the endpoint is correct and Desktop is running on the target machine."
-                        .to_string()
-                }
+                ConnectionMode::Local => "The CLI could not reach Linkly AI Desktop. This does not prove that Linkly AI Desktop is stopped.\n    If this command is running inside an AI-agent network sandbox:\n      1. Use the Linkly MCP integration if it is configured.\n      2. Otherwise, approve retrying this Linkly CLI command outside the network sandbox.\n    If that retry still fails, launch Linkly AI Desktop and try again."
+                    .to_string(),
+                ConnectionMode::Lan { .. } => "The CLI could not reach the configured Linkly AI Desktop endpoint. Check that the endpoint is correct, but note that this does not prove that Linkly AI Desktop is stopped.\n    If this command is running inside an AI-agent network sandbox:\n      1. Use the Linkly MCP integration if it is configured.\n      2. Otherwise, approve retrying this Linkly CLI command outside the network sandbox.\n    If that retry still fails, confirm Linkly AI Desktop is running on the target machine."
+                    .to_string(),
                 ConnectionMode::Remote => "Check your network connection.".to_string(),
             };
             // `doctor` exists to point at the real cause; a proxy silently in
