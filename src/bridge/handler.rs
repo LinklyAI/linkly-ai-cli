@@ -298,7 +298,7 @@ pub struct ListInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Absolute directory path to list. Valid for scope=\"folder\" and local scope=\"library\" (must fall inside the library's folders). Omit with scope=\"folder\" to list across all watched roots. The path is an ADDRESS, not a pattern — no globs; if you only know a fuzzy name, call `find_paths` first and use the returned path."
+        description = "Absolute directory path to list. Valid for scope=\"folder\" and local scope=\"library\" (must fall inside the library's folders, or inside the Notes/Clips directory when the library has a tag filter for that source — such paths list only the documents matched by the filter). Omit with scope=\"folder\" to list across all watched roots. The path is an ADDRESS, not a pattern — no globs; if you only know a fuzzy name, call `find_paths` first and use the returned path."
     )]
     pub path: Option<String>,
 
