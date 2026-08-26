@@ -99,7 +99,7 @@ pub enum Command {
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Filter by document types (comma-separated, e.g. pdf,md,docx,pptx,epub)
+        /// Filter by document types (comma-separated, e.g. pdf,md,docx,pptx,epub,xlsx,csv)
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
 
