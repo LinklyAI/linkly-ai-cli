@@ -62,7 +62,7 @@ pub struct SearchInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"pptx\", \"epub\", \"xlsx\", \"csv\", \"txt\", \"html\", \"image\", \"audio\", \"video\"]"
+        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"xlsx\", \"csv\", \"doc\", \"txt\", \"docx\", \"pptx\", \"rtf\", \"epub\", \"html\", \"image\", \"audio\", \"video\"]"
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -304,7 +304,7 @@ pub struct ListInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"pptx\", \"epub\", \"xlsx\", \"csv\", \"txt\", \"html\", \"image\", \"audio\", \"video\"]. Valid for scope=\"folder\" and scope=\"library\"."
+        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"xlsx\", \"csv\", \"doc\", \"txt\", \"docx\", \"pptx\", \"rtf\", \"epub\", \"html\", \"image\", \"audio\", \"video\"]. Valid for scope=\"folder\" and scope=\"library\"."
     )]
     pub doc_types: Option<Vec<String>>,
 
