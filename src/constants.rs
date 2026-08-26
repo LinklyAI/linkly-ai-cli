@@ -13,6 +13,6 @@
 /// Note: the MCP bridge (`linkly mcp`) passes `doc_types` through without
 /// validation, so an out-of-date CLI never blocks a bridged client.
 pub const VALID_DOC_TYPES: &[&str] = &[
-    "pdf", "md", "xlsx", "csv", "doc", "txt", "docx", "pptx", "rtf", "epub", "html", "image",
+    "pdf", "md", "xlsx", "csv", "docx", "txt", "pptx", "doc", "rtf", "epub", "html", "image",
     "audio", "video",
 ];
