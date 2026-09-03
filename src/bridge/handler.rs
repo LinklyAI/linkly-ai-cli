@@ -62,7 +62,7 @@ pub struct SearchInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"doc\", \"pptx\", \"epub\", \"rtf\", \"txt\", \"html\", \"image\", \"audio\", \"video\"]"
+        description = "Filter by document type name, as reported in the doc_type field of each search result (e.g. [\"pdf\", \"md\", \"docx\"]). Type name, not extension. This is not a closed set — newly supported types appear there without a schema change."
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -304,7 +304,7 @@ pub struct ListInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"docx\", \"doc\", \"pptx\", \"epub\", \"rtf\", \"txt\", \"html\", \"image\", \"audio\", \"video\"]. Valid for scope=\"folder\" and scope=\"library\"."
+        description = "Filter by document type name, as reported in the doc_type field of each result (e.g. [\"pdf\", \"md\", \"docx\"]). Type name, not extension. This is not a closed set — newly supported types appear there without a schema change. Valid for scope=\"folder\" and scope=\"library\"."
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -493,7 +493,7 @@ impl StdioBridgeHandler {
     #[tool(
         name = "outline",
         annotations(read_only_hint = true),
-        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: only documents with reliable parsed outlines (e.g. Markdown, DOCX/DOC/RTF with headings, PPTX slide outlines, EPUB table-of-contents outlines) will show structural outlines; for other documents, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
+        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: has_outline in each search result tells you which documents have a parsed outline; for the rest, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
     )]
     async fn outline(
         &self,
