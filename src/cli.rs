@@ -361,6 +361,24 @@ under oh-my-zsh); a bare zsh needs `autoload -Uz compinit && compinit` in
         #[command(subcommand)]
         action: AuthAction,
     },
+
+    /// Install, update, or inspect the linkly-ai agent skill
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SkillsAction {
+    /// Show the installed version, the latest published one, and where it lives
+    Status,
+
+    /// Download and install the skill
+    Install,
+
+    /// Update an installed skill, or install it when it is missing
+    Update,
 }
 
 #[derive(Subcommand)]

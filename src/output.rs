@@ -10,18 +10,34 @@ pub fn print_result(content: &str, json_mode: bool) {
         if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(content) {
             if let Some(obj) = data.as_object_mut() {
                 obj.insert("status".to_string(), serde_json::json!("success"));
+                add_skills_hint(obj);
             }
             println!("{}", data);
         } else {
             // Fallback: wrap as content string (backward compatible with older MCP server)
-            let envelope = serde_json::json!({
+            let mut envelope = serde_json::json!({
                 "status": "success",
                 "content": content,
             });
+            if let Some(obj) = envelope.as_object_mut() {
+                add_skills_hint(obj);
+            }
             println!("{}", envelope);
         }
     } else {
         println!("{}", content);
+    }
+}
+
+/// Attach the skills notice when one is pending.
+///
+/// The underscore prefix marks it as metadata about the call rather than part
+/// of the answer, matching `_meta` in the desktop's MCP responses. Errors do
+/// not carry it: a failure envelope is read to find out what went wrong, and
+/// an unrelated advisory there only dilutes the signal.
+fn add_skills_hint(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(hint) = crate::skills::hint() {
+        obj.insert("_skills_hint".to_string(), serde_json::json!(hint));
     }
 }
 

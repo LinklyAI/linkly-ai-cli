@@ -18,6 +18,11 @@ use crate::connection::ConnectionInfo;
 pub struct StdioBridgeHandler {
     client: std::sync::Arc<McpClient>,
     conn: std::sync::Arc<ConnectionInfo>,
+    /// Set once the skills notice has been appended, so it rides along with a
+    /// single tool result. Repeating it on every call would spend the model's
+    /// attention on the same sentence until it stops reading it — and this is
+    /// a long-lived process, so "every call" can mean hundreds of times.
+    notice_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -26,8 +31,30 @@ impl StdioBridgeHandler {
         Self {
             client: std::sync::Arc::new(client),
             conn: std::sync::Arc::new(conn),
+            notice_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Finish a successful tool call, appending the skills notice the first
+    /// time there is one.
+    ///
+    /// Every tool ends here rather than building its own result: a notice that
+    /// only some tools carry would appear or not depending on which tool the
+    /// agent happened to call first. Errors deliberately never reach this
+    /// path — a failure is read to find out what broke, and an unrelated
+    /// advisory there only dilutes the signal.
+    fn finish(&self, content: String) -> CallToolResult {
+        let Some(notice) = crate::skills::hint() else {
+            return CallToolResult::success(vec![Content::text(content)]);
+        };
+        if self
+            .notice_sent
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return CallToolResult::success(vec![Content::text(content)]);
+        }
+        CallToolResult::success(vec![Content::text(format!("{content}\n\n{notice}"))])
     }
 }
 
@@ -424,7 +451,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -445,7 +472,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -466,7 +493,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -487,7 +514,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -508,7 +535,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -529,7 +556,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -550,7 +577,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -571,7 +598,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -592,7 +619,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 }
 

@@ -8,6 +8,7 @@ mod doc_ids;
 mod manifest;
 mod outcome;
 mod output;
+mod skills;
 #[cfg(test)]
 mod test_helpers;
 mod version_check;
@@ -24,6 +25,15 @@ async fn main() {
 
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
+    // Same shape for the skill: bounded, silent on failure, and started early
+    // so it overlaps the command instead of adding latency to it. The task
+    // publishes its own result the moment it lands, which is what lets a JSON
+    // envelope printed from inside `run` pick it up without anyone awaiting.
+    let skills_check = tokio::spawn(async {
+        let hint = skills::check_silently().await;
+        skills::publish_hint(hint.clone());
+        hint
+    });
 
     // Write installed manifest off the async runtime — even though the
     // I/O is tiny, blocking the executor for synchronous filesystem
@@ -32,6 +42,17 @@ async fn main() {
     let _ = tokio::task::spawn_blocking(manifest::write_manifest).await;
 
     let result = run(cli).await;
+
+    // The skills notice goes to stdout, not stderr. Its audience is whoever
+    // reads the command's output — an agent driving the CLI reads stdout and
+    // never sees stderr, which is why the CLI's own hint below has never
+    // reached one. JSON mode carries the same notice as a field on the
+    // envelope instead, so machine-readable output stays parseable.
+    if let Ok(Some(hint)) = skills_check.await {
+        if !json_mode {
+            println!("\n{}", hint);
+        }
+    }
 
     // Show update hint if available (only in non-JSON mode)
     if !json_mode {
@@ -103,6 +124,12 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .map(found),
         Command::Completions { shell } => commands::completions::run(shell).map(found),
         Command::SelfUpdate => commands::self_update::run().await.map(found),
+        Command::Skills { action } => match action {
+            cli::SkillsAction::Status => commands::skills::status(json_mode).await,
+            cli::SkillsAction::Install => commands::skills::install().await,
+            cli::SkillsAction::Update => commands::skills::update().await,
+        }
+        .map(found),
         Command::Mcp { endpoint, remote } => commands::mcp::run(endpoint.as_deref(), remote)
             .await
             .map(found),
