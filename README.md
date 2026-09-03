@@ -229,6 +229,26 @@ linkly list-libraries --remote
 linkly self-update
 ```
 
+### Agent Skill
+
+The `linkly-ai` skill teaches agents how to drive these tools. The CLI reports
+its version, installs it, and upgrades it in place:
+
+```bash
+linkly skills status    # installed version, latest published, and where it lives
+linkly skills install   # download and install
+linkly skills update    # upgrade an installed copy, or install a missing one
+```
+
+When an update is available, tool output carries a one-line notice saying so.
+It is informational and safe to ignore.
+
+`update` follows the shape of each install: a symlink is left to the store it
+points at, a `git` checkout is reported rather than overwritten, and a real
+directory is replaced with the previous copy moved aside until the new one
+verifies. Only the `linkly-ai` subdirectory is ever touched — the surrounding
+skills directory belongs to whatever else you have installed there.
+
 ## Connection Modes
 
 The CLI supports three connection modes:
