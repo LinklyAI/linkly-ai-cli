@@ -241,7 +241,8 @@ linkly skills update    # upgrade an installed copy, or install a missing one
 ```
 
 When an update is available, tool output carries a one-line notice saying so.
-It is informational and safe to ignore, at most once a day. Under `--json` the
+It is informational and safe to ignore, and appears at most once every four
+hours. Under `--json` the
 notice arrives as a `_skills_hint` field, best-effort: the check runs
 concurrently with the command, so a fast command can finish first and the field
 is then absent. Plain output and the `linkly mcp` bridge always carry it. To

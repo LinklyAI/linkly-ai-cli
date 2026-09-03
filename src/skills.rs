@@ -36,7 +36,14 @@ const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
 const MUTE_ENV: &str = "LINKLY_NO_SKILLS_HINT";
 
 const STATE_FILE: &str = "skills-check.json";
-const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long a notice stays quiet after one is delivered.
+///
+/// Four hours rather than a day, so a working session sees it about twice.
+/// Once per session is one chance to be missed — the notice can land in the
+/// middle of a long tool result, or while the reader is looking elsewhere — and
+/// a second showing costs one line against an advisory that stops entirely as
+/// soon as it is acted on.
+const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 /// Same bound as the CLI's own update check: an unreachable updater host must
 /// not hold up the command the user actually ran.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
