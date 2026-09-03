@@ -189,10 +189,21 @@ mod tests {
         assert!(err.contains("pptx"));
         // Regression guard: epub must be advertised as a supported type.
         assert!(err.contains("epub"));
+        // Regression guard: rtf/doc must be advertised（desktop 新增，同批次发版）。
+        assert!(err.contains("rtf"));
+        assert!(err.contains(", doc,"));
         // Regression guard: the media types must be advertised too — they were
         // missing from the whitelist while the desktop already indexed them.
         assert!(err.contains("audio"));
         assert!(err.contains("video"));
+    }
+
+    #[test]
+    fn rtf_and_legacy_doc_are_accepted() {
+        assert_eq!(
+            validate_doc_types(Some(vec!["rtf".into(), "doc".into()])),
+            Ok(Some(vec!["rtf".into(), "doc".into()]))
+        );
     }
 
     #[test]
