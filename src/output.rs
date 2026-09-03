@@ -153,3 +153,23 @@ mod tests {
         assert_eq!(result.unwrap_err().to_string(), "");
     }
 }
+
+#[cfg(test)]
+mod skills_hint_tests {
+    /// The notice has to reach JSON consumers too — plain-text output is the
+    /// primary path, but an agent that asked for `--json` would otherwise
+    /// never learn its skill is stale.
+    #[test]
+    fn json_envelopes_carry_the_notice() {
+        crate::skills::publish_hint(Some("[linkly] Skills v1.0.0 installed".to_string()));
+
+        let mut obj = serde_json::Map::new();
+        obj.insert("status".into(), serde_json::json!("success"));
+        super::add_skills_hint(&mut obj);
+
+        assert_eq!(
+            obj.get("_skills_hint").and_then(|v| v.as_str()),
+            Some("[linkly] Skills v1.0.0 installed")
+        );
+    }
+}

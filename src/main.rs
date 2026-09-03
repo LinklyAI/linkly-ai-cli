@@ -22,6 +22,7 @@ async fn main() {
     let cli = Cli::parse();
     let json_mode = cli.json;
     let exit_code_mode = cli.exit_code;
+    let manages_skills = matches!(cli.command, Command::Skills { .. });
 
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
@@ -48,8 +49,13 @@ async fn main() {
     // never sees stderr, which is why the CLI's own hint below has never
     // reached one. JSON mode carries the same notice as a field on the
     // envelope instead, so machine-readable output stays parseable.
+    // `linkly skills …` never carries the notice. It is computed when the
+    // process starts, so it describes the state before the command ran —
+    // reporting "not installed" immediately after an install succeeded is
+    // worse than saying nothing, and someone running these commands is
+    // already looking at the real answer.
     if let Ok(Some(hint)) = skills_check.await {
-        if !json_mode {
+        if !json_mode && !manages_skills {
             println!("\n{}", hint);
         }
     }

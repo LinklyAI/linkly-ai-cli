@@ -21,7 +21,11 @@ use serde::{Deserialize, Serialize};
 pub const SKILL_DIR_NAME: &str = "linkly-ai";
 
 const LATEST_URL: &str = "https://updater.linkly.ai/skills/latest.json";
-pub const ZIP_URL: &str = "https://updater.linkly.ai/skills/linkly-skills-latest.zip";
+/// Last-resort download location, used only when latest.json cannot be read —
+/// at which point the version is unknown anyway, so there is nothing better to
+/// aim at. Prefer [`Latest::url`]: this rolling path sits behind a multi-hour
+/// CDN cache and serves the previous package for a while after each release.
+const FALLBACK_ZIP_URL: &str = "https://updater.linkly.ai/skills/linkly-skills-latest.zip";
 const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
 
 const STATE_FILE: &str = "skills-check.json";
@@ -33,6 +37,12 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Deserialize)]
 struct LatestInfo {
     version: String,
+}
+
+/// What the update server currently publishes.
+pub struct Latest {
+    pub version: semver::Version,
+    pub url: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,7 +143,7 @@ pub fn detect() -> Local {
     Local::Missing
 }
 
-pub async fn fetch_latest() -> Result<semver::Version> {
+pub async fn fetch_latest() -> Result<Latest> {
     let client = reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)
         .build()
@@ -148,8 +158,23 @@ pub async fn fetch_latest() -> Result<semver::Version> {
         .json()
         .await
         .context("Invalid response from the skills update server")?;
-    semver::Version::parse(&info.version)
-        .with_context(|| format!("Invalid version in skills latest.json: {}", info.version))
+    let version = semver::Version::parse(&info.version)
+        .with_context(|| format!("Invalid version in skills latest.json: {}", info.version))?;
+    // The download path is derived here rather than taken from latest.json.
+    // A server-supplied URL is only as good as whatever was published last —
+    // and a latest.json still pointing at the rolling file would hand us the
+    // CDN's cached copy of the previous release, which is the exact failure
+    // this is meant to avoid. The versioned path is immutable, so deriving it
+    // from a version we just read cannot be stale.
+    // SYNC: the layout is written by .github/workflows/release.yml in
+    // linkly-ai-skills; changing it there requires changing it here.
+    let url = format!("https://updater.linkly.ai/skills/v{version}/linkly-skills.zip");
+    Ok(Latest { version, url })
+}
+
+/// Where to download from when the update server is unreachable.
+pub fn fallback_zip_url() -> &'static str {
+    FALLBACK_ZIP_URL
 }
 
 fn state_path() -> Option<PathBuf> {
@@ -237,7 +262,7 @@ pub async fn check_silently() -> Option<String> {
             ))
         }
         Local::Untracked(_) => {
-            let latest = fetch_latest().await.ok()?;
+            let latest = fetch_latest().await.ok()?.version;
             record_checked();
             Some(format!(
                 "[linkly] Skills: installed copy predates version tracking, v{latest} available. \
@@ -245,7 +270,7 @@ pub async fn check_silently() -> Option<String> {
             ))
         }
         Local::Tracked(_, current) => {
-            let latest = fetch_latest().await.ok()?;
+            let latest = fetch_latest().await.ok()?.version;
             record_checked();
             (latest > current).then(|| {
                 format!(

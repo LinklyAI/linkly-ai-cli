@@ -45,7 +45,7 @@ fn classify(path: &Path) -> Form {
 
 pub async fn status(json_mode: bool) -> Result<()> {
     let local = skills::detect();
-    let latest = skills::fetch_latest().await.ok();
+    let latest = skills::fetch_latest().await.ok().map(|l| l.version);
 
     let installed = match &local {
         Local::Missing => None,
@@ -160,9 +160,17 @@ pub async fn update() -> Result<()> {
     Ok(())
 }
 
+/// Resolve the download URL through latest.json so the package comes from the
+/// immutable, version-scoped path. The rolling file is only a last resort: it
+/// sits behind a multi-hour CDN cache and keeps serving the previous release
+/// well after a new one is published.
 async fn download() -> Result<Vec<u8>> {
-    println!("Downloading {}...", skills::ZIP_URL);
-    let bytes = reqwest::get(skills::ZIP_URL)
+    let url = match skills::fetch_latest().await {
+        Ok(latest) => latest.url,
+        Err(_) => skills::fallback_zip_url().to_string(),
+    };
+    println!("Downloading {}...", url);
+    let bytes = reqwest::get(&url)
         .await
         .context("Failed to download the skills package")?
         .error_for_status()
