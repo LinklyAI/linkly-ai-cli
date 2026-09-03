@@ -241,7 +241,15 @@ linkly skills update    # upgrade an installed copy, or install a missing one
 ```
 
 When an update is available, tool output carries a one-line notice saying so.
-It is informational and safe to ignore.
+It is informational and safe to ignore, at most once a day. To turn it off
+entirely:
+
+```bash
+export LINKLY_NO_SKILLS_HINT=1
+```
+
+`linkly mcp` inherits the environment, so setting it in an MCP client's config
+silences the bridge too.
 
 `update` follows the shape of each install: a symlink is left to the store it
 points at, a `git` checkout is reported rather than overwritten, and a real

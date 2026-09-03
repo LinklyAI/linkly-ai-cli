@@ -28,6 +28,13 @@ const LATEST_URL: &str = "https://updater.linkly.ai/skills/latest.json";
 const FALLBACK_ZIP_URL: &str = "https://updater.linkly.ai/skills/linkly-skills-latest.zip";
 const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
 
+/// Opt-out. An environment variable rather than a flag or a config file: a
+/// flag would have to be repeated on every invocation, including the ones
+/// inside scripts and MCP client configs where there is nowhere to put it,
+/// and the CLI has no config file to extend. `linkly mcp` inherits the
+/// environment, so setting it once in a client's config silences the bridge too.
+const MUTE_ENV: &str = "LINKLY_NO_SKILLS_HINT";
+
 const STATE_FILE: &str = "skills-check.json";
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Same bound as the CLI's own update check: an unreachable updater host must
@@ -177,6 +184,19 @@ pub fn fallback_zip_url() -> &'static str {
     FALLBACK_ZIP_URL
 }
 
+/// `0`, `false` and empty read as "not set" — someone writing
+/// `LINKLY_NO_SKILLS_HINT=0` means they want the notice, and honouring the
+/// variable's presence alone would silently do the opposite.
+fn muted() -> bool {
+    match std::env::var(MUTE_ENV) {
+        Err(_) => false,
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "0" || v == "false")
+        }
+    }
+}
+
 fn state_path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".linkly").join(STATE_FILE))
 }
@@ -244,6 +264,9 @@ pub fn hint() -> Option<&'static str> {
 /// saying. Never returns an error: a failed check must be indistinguishable
 /// from "everything is fine", or offline users get a permanent complaint.
 pub async fn check_silently() -> Option<String> {
+    if muted() {
+        return None;
+    }
     if !due_for_check() {
         return None;
     }
@@ -292,6 +315,39 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(body.as_bytes()).unwrap();
         path
+    }
+
+    /// Set only inside these tests, which run in the same process — a shared
+    /// guard keeps them from reading each other's variable.
+    fn with_mute_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os(MUTE_ENV);
+        match value {
+            Some(v) => std::env::set_var(MUTE_ENV, v),
+            None => std::env::remove_var(MUTE_ENV),
+        }
+        let out = f();
+        match previous {
+            Some(v) => std::env::set_var(MUTE_ENV, v),
+            None => std::env::remove_var(MUTE_ENV),
+        }
+        out
+    }
+
+    #[test]
+    fn the_notice_can_be_switched_off() {
+        assert!(with_mute_env(Some("1"), muted));
+        assert!(with_mute_env(Some("yes"), muted));
+    }
+
+    /// Writing `=0` asks for the notice, not against it.
+    #[test]
+    fn falsey_values_leave_the_notice_on() {
+        assert!(!with_mute_env(None, muted));
+        assert!(!with_mute_env(Some("0"), muted));
+        assert!(!with_mute_env(Some("false"), muted));
+        assert!(!with_mute_env(Some(""), muted));
     }
 
     #[test]
