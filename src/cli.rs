@@ -363,6 +363,13 @@ under oh-my-zsh); a bare zsh needs `autoload -Uz compinit && compinit` in
     },
 
     /// Install, update, or inspect the linkly-ai agent skill
+    #[command(long_about = "\
+Install, update, or inspect the linkly-ai agent skill.
+
+When an update is available, command output carries a one-line notice, at most
+once a day. Set LINKLY_NO_SKILLS_HINT=1 to turn it off. `linkly mcp` inherits
+the environment, so setting it in an MCP client's config silences the bridge
+too.")]
     Skills {
         #[command(subcommand)]
         action: SkillsAction,
