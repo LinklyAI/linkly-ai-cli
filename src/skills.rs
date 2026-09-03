@@ -244,12 +244,18 @@ fn record_checked() {
 
 /// The notice, once computed, for output paths that cannot await it.
 ///
-/// `main` runs the check concurrently with the command itself; plain-text
-/// output awaits the task and is therefore always accurate. JSON output is
+/// `main` runs the check concurrently with the command itself. Plain-text
+/// output awaits the task and is always accurate; the bridge is long-lived, so
+/// the check has always landed before its first tool call. JSON output is
 /// printed from inside the command, before the task is joined, so it reads
-/// this slot and simply omits the field when the check has not landed yet —
-/// a machine-readable envelope is better off missing an advisory field than
-/// waiting on the network for it.
+/// this slot and omits the field when nothing has landed yet.
+///
+/// In practice that means JSON carries the notice only when deciding it needed
+/// no network — "not installed". The two states that read latest.json lose the
+/// race against a local call, which returns in milliseconds. Measured, not
+/// assumed. The alternative is making every JSON command wait up to three
+/// seconds on an advisory, which is a bad trade for a channel the agent-facing
+/// paths do not depend on.
 static HINT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 pub fn publish_hint(hint: Option<String>) {
