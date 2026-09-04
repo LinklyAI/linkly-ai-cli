@@ -20,11 +20,9 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// Output in JSON format. Opt-in, for scripts that parse the result — if
-    /// you are an agent reading this output yourself, do not pass it. The
-    /// default plain text is the documented path: it is what the Linkly AI
-    /// skill describes, it costs fewer tokens, and advisory notices read
-    /// better there than as a field you have to look for
+    /// Output in JSON format, for scripts that parse the result. Agents reading
+    /// the output themselves should not pass it — plain text is the default and
+    /// the documented path
     #[arg(long, global = true)]
     pub json: bool,
 
