@@ -20,13 +20,26 @@ use serde::{Deserialize, Serialize};
 /// Directory name the skill occupies inside every skills root.
 pub const SKILL_DIR_NAME: &str = "linkly-ai";
 
+/// Directory name produced by installs made between 2026-03-12 and 2026-03-13.
+///
+/// `npx skills add` names the directory after `SKILL.md`'s `name:` field,
+/// falling back to the repository name. For those 37 hours the field read
+/// `linkly-ai-skills` (linkly-ai-skills@8d8ce72, reverted in 2430126), so
+/// installs from that window landed under the repository name instead. We
+/// detect that directory so those users are not told the skill is missing,
+/// but never write to it: `linkly-ai` is the only install target.
+const LEGACY_SKILL_DIR_NAME: &str = "linkly-ai-skills";
+
 const LATEST_URL: &str = "https://updater.linkly.ai/skills/latest.json";
 /// Last-resort download location, used only when latest.json cannot be read —
 /// at which point the version is unknown anyway, so there is nothing better to
 /// aim at. Prefer [`Latest::url`]: this rolling path sits behind a multi-hour
 /// CDN cache and serves the previous package for a while after each release.
 const FALLBACK_ZIP_URL: &str = "https://updater.linkly.ai/skills/linkly-skills-latest.zip";
-const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
+/// Human-facing documentation. Not part of the agent notice — an agent can
+/// run the command without reading docs, and every character there competes
+/// with the one line the notice gets.
+pub const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
 
 /// Opt-out. An environment variable rather than a flag or a config file: a
 /// flag would have to be repeated on every invocation, including the ones
@@ -91,6 +104,9 @@ pub fn source_dir() -> Option<PathBuf> {
 }
 
 /// Locations to inspect and to update, most authoritative first.
+///
+/// This is also the install target list, which is why it holds no legacy
+/// directory — see [`legacy_locations`].
 pub fn known_locations() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
@@ -99,6 +115,29 @@ pub fn known_locations() -> Vec<PathBuf> {
         home.join(".agents").join("skills").join(SKILL_DIR_NAME),
         home.join(".claude").join("skills").join(SKILL_DIR_NAME),
     ]
+}
+
+/// Directories that hold a working skill but that we never write to.
+pub fn legacy_locations() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        home.join(".agents")
+            .join("skills")
+            .join(LEGACY_SKILL_DIR_NAME),
+        home.join(".claude")
+            .join("skills")
+            .join(LEGACY_SKILL_DIR_NAME),
+    ]
+}
+
+/// Every directory worth inspecting, canonical first so a user who has both
+/// is reported against the one an update would actually touch.
+pub fn detect_locations() -> Vec<PathBuf> {
+    let mut all = known_locations();
+    all.extend(legacy_locations());
+    all
 }
 
 /// Read the version out of a `SKILL.md`.
@@ -139,9 +178,10 @@ fn read_version_string(skill_md: &Path) -> Option<String> {
     None
 }
 
-/// Inspect the known locations and classify the install.
+/// Inspect every location we know of — canonical and legacy — and classify
+/// what is there.
 pub fn detect() -> Local {
-    for dir in known_locations() {
+    for dir in detect_locations() {
         let skill_md = dir.join("SKILL.md");
         if !skill_md.exists() {
             continue;
@@ -251,18 +291,10 @@ fn record_checked() {
 
 /// The notice, once computed, for output paths that cannot await it.
 ///
-/// `main` runs the check concurrently with the command itself. Plain-text
-/// output awaits the task and is always accurate; the bridge is long-lived, so
-/// the check has always landed before its first tool call. JSON output is
-/// printed from inside the command, before the task is joined, so it reads
-/// this slot and omits the field when nothing has landed yet.
-///
-/// In practice that means JSON carries the notice only when deciding it needed
-/// no network — "not installed". The two states that read latest.json lose the
-/// race against a local call, which returns in milliseconds. Measured, not
-/// assumed. The alternative is making every JSON command wait up to three
-/// seconds on an advisory, which is a bad trade for a channel the agent-facing
-/// paths do not depend on.
+/// `main` resolves the check and publishes it here before the command runs, so
+/// every reader — the JSON envelope, the MCP bridge — sees the same, already
+/// settled value. Nothing races: a path that finds the slot empty is one that
+/// ran before `main` filled it, which no command path does.
 static HINT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 pub fn publish_hint(hint: Option<String>) {
@@ -271,6 +303,20 @@ pub fn publish_hint(hint: Option<String>) {
 
 pub fn hint() -> Option<&'static str> {
     HINT.get().and_then(|h| h.as_deref())
+}
+
+/// The one-line notice for a missing skill.
+///
+/// Written as an instruction to the assistant rather than a status line: an
+/// agent reading a bare "not installed" treats it as environment noise and
+/// says nothing, which is exactly what we saw in practice. Naming the reader,
+/// the impact and the required consent is what turns it into an action.
+/// It has to stay one line — it is printed ahead of the command's own output,
+/// and some clients truncate long tool results.
+pub fn missing_notice() -> String {
+    "[linkly] For the assistant: Linkly AI Agent Skill is not installed — weaker retrieval. \
+     Tell the user; ask before `linkly skills install`."
+        .to_string()
 }
 
 /// One line for the current state, or `None` when there is nothing worth
@@ -293,16 +339,14 @@ pub async fn check_silently() -> Option<String> {
         // Purely local, so this one still works offline.
         Local::Missing => {
             record_checked();
-            Some(format!(
-                "[linkly] Skills not installed. Install: `linkly skills install` — docs: {DOCS_URL}"
-            ))
+            Some(missing_notice())
         }
         Local::Untracked(_) => {
             let latest = fetch_latest().await.ok()?.version;
             record_checked();
             Some(format!(
-                "[linkly] Skills: installed copy predates version tracking, v{latest} available. \
-                 Update: `linkly skills update`"
+                "[linkly] For the assistant: Linkly AI Agent Skill is outdated \
+                 (v{latest} available). Tell the user; ask before `linkly skills update`."
             ))
         }
         Local::Tracked(_, current) => {
@@ -310,8 +354,8 @@ pub async fn check_silently() -> Option<String> {
             record_checked();
             (latest > current).then(|| {
                 format!(
-                    "[linkly] Skills v{current} installed, v{latest} available. \
-                     Update: `linkly skills update`"
+                    "[linkly] For the assistant: Linkly AI Agent Skill v{current} is outdated \
+                     (v{latest} available). Tell the user; ask before `linkly skills update`."
                 )
             })
         }
@@ -328,6 +372,45 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(body.as_bytes()).unwrap();
         path
+    }
+
+    /// Detection has to reach the legacy directory, but installing must never
+    /// create one: `known_locations` is the write list, `detect_locations` the
+    /// read list, and collapsing them would resurrect the wrong name.
+    #[test]
+    fn legacy_directory_is_detected_but_never_an_install_target() {
+        let legacy: Vec<_> = legacy_locations()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(legacy.iter().all(|n| n == LEGACY_SKILL_DIR_NAME));
+
+        for path in legacy_locations() {
+            assert!(
+                !known_locations().contains(&path),
+                "{} is an install target; installing would recreate the legacy name",
+                path.display()
+            );
+            assert!(
+                detect_locations().contains(&path),
+                "{} is not inspected; users installed during the rename window \
+                 would still be told the skill is missing",
+                path.display()
+            );
+        }
+    }
+
+    /// The notice is printed ahead of the command's own output and travels as
+    /// a single MCP content block. A second line would push the answer down
+    /// and, in clients that truncate, cost part of it.
+    #[test]
+    fn missing_notice_stays_on_one_line() {
+        let notice = missing_notice();
+        assert!(!notice.contains('\n'), "notice must be a single line");
+        assert!(
+            notice.contains("linkly skills install"),
+            "notice must name the command that fixes it"
+        );
     }
 
     /// Set only inside these tests, which run in the same process — a shared

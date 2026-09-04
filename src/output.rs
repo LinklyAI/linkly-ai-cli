@@ -31,13 +31,14 @@ pub fn print_result(content: &str, json_mode: bool) {
 
 /// Attach the skills notice when one is pending.
 ///
-/// The underscore prefix marks it as metadata about the call rather than part
-/// of the answer, matching `_meta` in the desktop's MCP responses. Errors do
+/// The field is named without an underscore on purpose. `_`-prefixed keys
+/// mirror MCP's `_meta`, whose whole contract is "the client may ignore this"
+/// — precisely the reading that made agents skip the notice. Errors still do
 /// not carry it: a failure envelope is read to find out what went wrong, and
 /// an unrelated advisory there only dilutes the signal.
 fn add_skills_hint(obj: &mut serde_json::Map<String, serde_json::Value>) {
     if let Some(hint) = crate::skills::hint() {
-        obj.insert("_skills_hint".to_string(), serde_json::json!(hint));
+        obj.insert("skill_notice".to_string(), serde_json::json!(hint));
     }
 }
 
@@ -168,7 +169,7 @@ mod skills_hint_tests {
         super::add_skills_hint(&mut obj);
 
         assert_eq!(
-            obj.get("_skills_hint").and_then(|v| v.as_str()),
+            obj.get("skill_notice").and_then(|v| v.as_str()),
             Some("[linkly] Skills v1.0.0 installed")
         );
     }

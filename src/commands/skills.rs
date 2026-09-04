@@ -55,7 +55,9 @@ pub async fn status(json_mode: bool) -> Result<()> {
     };
 
     if json_mode {
-        let locations: Vec<_> = skills::known_locations()
+        // Reporting lists every directory we inspect, legacy ones included —
+        // install and update still touch only the canonical locations.
+        let locations: Vec<_> = skills::detect_locations()
             .into_iter()
             .map(|p| {
                 serde_json::json!({
@@ -87,7 +89,7 @@ pub async fn status(json_mode: bool) -> Result<()> {
         None => println!("Latest published: {}", "unavailable".dimmed()),
     }
     println!();
-    for path in skills::known_locations() {
+    for path in skills::detect_locations() {
         let form = match classify(&path) {
             Form::Link => "link",
             Form::GitCheckout => "git checkout",

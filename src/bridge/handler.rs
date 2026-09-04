@@ -36,8 +36,14 @@ impl StdioBridgeHandler {
         }
     }
 
-    /// Finish a successful tool call, appending the skills notice the first
+    /// Finish a successful tool call, prepending the skills notice the first
     /// time there is one.
+    ///
+    /// The notice is its own content block, ahead of the answer. Concatenated
+    /// onto the end of the answer it read as a footer on someone else's text —
+    /// agents skipped it, and clients that truncate long tool results dropped
+    /// it entirely. A separate leading block is both visible and structurally
+    /// distinct from the content.
     ///
     /// Every tool ends here rather than building its own result: a notice that
     /// only some tools carry would appear or not depending on which tool the
@@ -54,7 +60,7 @@ impl StdioBridgeHandler {
         {
             return CallToolResult::success(vec![Content::text(content)]);
         }
-        CallToolResult::success(vec![Content::text(format!("{content}\n\n{notice}"))])
+        CallToolResult::success(vec![Content::text(notice), Content::text(content)])
     }
 }
 

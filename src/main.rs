@@ -13,6 +13,8 @@ mod skills;
 mod test_helpers;
 mod version_check;
 
+use std::io::Write;
+
 use clap::Parser;
 use cli::{AuthAction, Cli, Command, ConnectionArgs};
 use outcome::Outcome;
@@ -23,18 +25,18 @@ async fn main() {
     let json_mode = cli.json;
     let exit_code_mode = cli.exit_code;
     let manages_skills = matches!(cli.command, Command::Skills { .. });
+    // `linkly mcp` owns stdout: it is the JSON-RPC channel. A stray line there
+    // breaks the client's parse before the handshake completes, so the bridge
+    // delivers the notice as its own content block on the first tool result
+    // instead (see bridge::handler::finish).
+    let owns_stdout = matches!(cli.command, Command::Mcp { .. });
 
     // Silent version check in background (non-blocking)
     let update_check = tokio::spawn(commands::self_update::check_silently());
     // Same shape for the skill: bounded, silent on failure, and started early
-    // so it overlaps the command instead of adding latency to it. The task
-    // publishes its own result the moment it lands, which is what lets a JSON
-    // envelope printed from inside `run` pick it up without anyone awaiting.
-    let skills_check = tokio::spawn(async {
-        let hint = skills::check_silently().await;
-        skills::publish_hint(hint.clone());
-        hint
-    });
+    // so it overlaps the manifest write below rather than adding its latency
+    // to the command.
+    let skills_check = tokio::spawn(skills::check_silently());
 
     // Write installed manifest off the async runtime — even though the
     // I/O is tiny, blocking the executor for synchronous filesystem
@@ -42,23 +44,31 @@ async fn main() {
     // concurrent background task (e.g. the update check above).
     let _ = tokio::task::spawn_blocking(manifest::write_manifest).await;
 
-    let result = run(cli).await;
-
-    // The skills notice goes to stdout, not stderr. Its audience is whoever
-    // reads the command's output — an agent driving the CLI reads stdout and
-    // never sees stderr, which is why the CLI's own hint below has never
-    // reached one. JSON mode carries the same notice as a field on the
-    // envelope instead, so machine-readable output stays parseable.
-    // `linkly skills …` never carries the notice. It is computed when the
-    // process starts, so it describes the state before the command ran —
-    // reporting "not installed" immediately after an install succeeded is
-    // worse than saying nothing, and someone running these commands is
-    // already looking at the real answer.
-    if let Ok(Some(hint)) = skills_check.await {
-        if !json_mode && !manages_skills {
-            println!("\n{}", hint);
+    // The skills notice is resolved and printed BEFORE the command runs.
+    //
+    // Its audience is the agent driving the CLI, and a line appended after a
+    // long search result is read as a footer — or dropped outright by clients
+    // that truncate tool output. Ahead of the answer it is seen, and the wait
+    // it costs is bounded: the check is throttled locally, so all but one run
+    // every few hours resolves without touching the network.
+    //
+    // Publishing here also makes the JSON field exact. It used to be filled in
+    // from whatever had landed by the time `run` printed, so a slow check
+    // silently dropped the field from a machine-readable envelope.
+    //
+    // JSON mode gets the notice as a field on the envelope instead of a line,
+    // so the output stays parseable. `linkly skills …` never carries it: the
+    // state it describes is the one from before the command ran, and reporting
+    // "not installed" right after an install succeeded is worse than silence.
+    let skills_notice = skills_check.await.ok().flatten();
+    skills::publish_hint(skills_notice.clone());
+    if let Some(notice) = skills_notice {
+        if notice_goes_to_stdout(json_mode, manages_skills, owns_stdout) {
+            println!("{}", notice);
         }
     }
+
+    let result = run(cli).await;
 
     // Show update hint if available (only in non-JSON mode)
     if !json_mode {
@@ -69,6 +79,13 @@ async fn main() {
             );
         }
     }
+
+    // `std::process::exit` below skips destructors, and stdout is block-buffered
+    // whenever it is not a terminal — which is every agent and every pipeline
+    // reading us. Without this, an error path discards whatever is still
+    // buffered: the skills notice, and the JSON error envelope that
+    // `output::print_error` already wrote.
+    let _ = std::io::stdout().flush();
 
     // Exit-code semantics are opt-in. Historically every successful run exited
     // 0 and every failure exited 1; making "found nothing" exit 1 by default
@@ -99,6 +116,16 @@ async fn main() {
             std::process::exit(if exit_code_mode { 2 } else { 1 });
         }
     }
+}
+
+/// Whether the notice may be written to stdout as a plain line.
+///
+/// Each exclusion is a channel that already carries it, or cannot take it:
+/// JSON mode puts it on the envelope, `linkly skills …` prints the real state
+/// itself, and `linkly mcp` owns stdout for JSON-RPC — a line there breaks the
+/// client's parse before the handshake finishes.
+fn notice_goes_to_stdout(json_mode: bool, manages_skills: bool, owns_stdout: bool) -> bool {
+    !json_mode && !manages_skills && !owns_stdout
 }
 
 /// Commands with no notion of "found nothing" — reading a document, checking
@@ -313,5 +340,29 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .await
             .map(found)
         }
+    }
+}
+
+#[cfg(test)]
+mod notice_routing_tests {
+    use super::notice_goes_to_stdout;
+
+    #[test]
+    fn plain_commands_print_the_notice() {
+        assert!(notice_goes_to_stdout(false, false, false));
+    }
+
+    /// `linkly mcp` speaks JSON-RPC on stdout. A line there is not "a notice
+    /// the client might ignore" — it is a parse error before the handshake
+    /// completes, so the bridge sends it as a content block instead.
+    #[test]
+    fn the_mcp_bridge_never_prints_to_stdout() {
+        assert!(!notice_goes_to_stdout(false, false, true));
+    }
+
+    #[test]
+    fn json_and_skills_commands_carry_it_elsewhere() {
+        assert!(!notice_goes_to_stdout(true, false, false));
+        assert!(!notice_goes_to_stdout(false, true, false));
     }
 }
