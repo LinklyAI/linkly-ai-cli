@@ -49,13 +49,13 @@ pub const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
 const MUTE_ENV: &str = "LINKLY_NO_SKILLS_HINT";
 
 const STATE_FILE: &str = "skills-check.json";
-/// How long a notice stays quiet after one is delivered.
+/// How long between two reads of latest.json.
 ///
-/// Four hours rather than a day, so a working session sees it about twice.
-/// Once per session is one chance to be missed — the notice can land in the
-/// middle of a long tool result, or while the reader is looking elsewhere — and
-/// a second showing costs one line against an advisory that stops entirely as
-/// soon as it is acted on.
+/// This throttles the *network* call, not the notice. "Not installed" is
+/// decided from the filesystem alone and is reported every run — throttling it
+/// is what let a whole agent session go without ever seeing it, because some
+/// unrelated process had already spent the window. Only the states that need
+/// to know the published version wait on this.
 const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 /// Same bound as the CLI's own update check: an unreachable updater host must
 /// not hold up the command the user actually ran.
@@ -326,22 +326,21 @@ pub async fn check_silently() -> Option<String> {
     if muted() {
         return None;
     }
-    if !due_for_check() {
-        return None;
-    }
 
     match detect() {
         // A hand-edited or forked copy. Silence beats a false alarm.
-        Local::Unparseable(_) => {
-            record_checked();
-            None
-        }
-        // Purely local, so this one still works offline.
-        Local::Missing => {
-            record_checked();
-            Some(missing_notice())
-        }
+        Local::Unparseable(_) => None,
+        // Decided from the filesystem alone: free, offline, and the state that
+        // costs the user the most. It is reported on every run rather than
+        // once per window — a throttled notice is one an agent session can
+        // miss entirely because another process spent the window first, which
+        // is exactly how this went unreported in practice.
+        Local::Missing => Some(missing_notice()),
+        // The rest need the published version, so they wait on the throttle.
         Local::Untracked(_) => {
+            if !due_for_check() {
+                return None;
+            }
             let latest = fetch_latest().await.ok()?.version;
             record_checked();
             Some(format!(
@@ -350,6 +349,9 @@ pub async fn check_silently() -> Option<String> {
             ))
         }
         Local::Tracked(_, current) => {
+            if !due_for_check() {
+                return None;
+            }
             let latest = fetch_latest().await.ok()?.version;
             record_checked();
             (latest > current).then(|| {
@@ -379,6 +381,9 @@ mod tests {
     /// read list, and collapsing them would resurrect the wrong name.
     #[test]
     fn legacy_directory_is_detected_but_never_an_install_target() {
+        // Both lists are derived from `HOME`; without the lock a concurrent
+        // test swapping it makes the two halves of this comparison disagree.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let legacy: Vec<_> = legacy_locations()
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
@@ -413,11 +418,57 @@ mod tests {
         );
     }
 
+    use crate::test_helpers::ENV_LOCK;
+
+    /// The throttle covers the network call, not the verdict. A missing skill
+    /// is decided from the filesystem, so it has to be reported even when the
+    /// window is closed — otherwise one unrelated process spending the window
+    /// silences the notice for every agent session in the next four hours,
+    /// which is how a real session went without ever seeing it.
+    #[test]
+    fn a_missing_skill_is_reported_inside_the_throttle_window() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_mute = std::env::var_os(MUTE_ENV);
+        std::env::set_var("HOME", home.path());
+        std::env::remove_var(MUTE_ENV);
+
+        // A check that completed just now: the window is shut for every state
+        // that needs to read latest.json.
+        std::fs::create_dir_all(home.path().join(".linkly")).unwrap();
+        std::fs::write(
+            home.path().join(".linkly").join(STATE_FILE),
+            serde_json::to_string(&CheckState {
+                last_checked_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!due_for_check(), "fixture must actually close the window");
+
+        // No skill anywhere under this HOME, and no network needed to say so.
+        // Driven with `block_on` rather than `#[tokio::test]` so the
+        // environment lock is never held across an await point.
+        let notice = tokio::runtime::Runtime::new()
+            .expect("failed to build a runtime")
+            .block_on(check_silently());
+
+        match previous_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(v) = previous_mute {
+            std::env::set_var(MUTE_ENV, v);
+        }
+
+        assert_eq!(notice, Some(missing_notice()));
+    }
+
     /// Set only inside these tests, which run in the same process — a shared
     /// guard keeps them from reading each other's variable.
     fn with_mute_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var_os(MUTE_ENV);
         match value {
             Some(v) => std::env::set_var(MUTE_ENV, v),

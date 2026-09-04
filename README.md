@@ -249,8 +249,12 @@ addressed to the assistant reading it — what is wrong, what it costs, and to
 ask the user before running the fix. It leads the output rather than trailing
 it, so a long result cannot bury it and a client that truncates cannot drop it.
 Under `--json` it arrives as a `skill_notice` field; over `linkly mcp` it is a
-separate content block ahead of the answer, sent once per process. The check
-itself runs at most once every four hours. To turn it off entirely:
+separate content block ahead of the answer, sent once per process.
+
+A missing skill is reported on every run — deciding it costs one filesystem
+check, and throttling it means one unrelated process can silence it for every
+session in the next four hours. The out-of-date notices do read the update
+server, so those are throttled to once every four hours. To turn it all off:
 
 ```bash
 export LINKLY_NO_SKILLS_HINT=1
