@@ -18,6 +18,11 @@ use crate::connection::ConnectionInfo;
 pub struct StdioBridgeHandler {
     client: std::sync::Arc<McpClient>,
     conn: std::sync::Arc<ConnectionInfo>,
+    /// Set once the skills notice has been appended, so it rides along with a
+    /// single tool result. Repeating it on every call would spend the model's
+    /// attention on the same sentence until it stops reading it — and this is
+    /// a long-lived process, so "every call" can mean hundreds of times.
+    notice_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -26,8 +31,36 @@ impl StdioBridgeHandler {
         Self {
             client: std::sync::Arc::new(client),
             conn: std::sync::Arc::new(conn),
+            notice_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Finish a successful tool call, prepending the skills notice the first
+    /// time there is one.
+    ///
+    /// The notice is its own content block, ahead of the answer. Concatenated
+    /// onto the end of the answer it read as a footer on someone else's text —
+    /// agents skipped it, and clients that truncate long tool results dropped
+    /// it entirely. A separate leading block is both visible and structurally
+    /// distinct from the content.
+    ///
+    /// Every tool ends here rather than building its own result: a notice that
+    /// only some tools carry would appear or not depending on which tool the
+    /// agent happened to call first. Errors deliberately never reach this
+    /// path — a failure is read to find out what broke, and an unrelated
+    /// advisory there only dilutes the signal.
+    fn finish(&self, content: String) -> CallToolResult {
+        let Some(notice) = crate::skills::hint() else {
+            return CallToolResult::success(vec![Content::text(content)]);
+        };
+        if self
+            .notice_sent
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return CallToolResult::success(vec![Content::text(content)]);
+        }
+        CallToolResult::success(vec![Content::text(notice), Content::text(content)])
     }
 }
 
@@ -62,7 +95,7 @@ pub struct SearchInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"xlsx\", \"csv\", \"docx\", \"txt\", \"pptx\", \"doc\", \"rtf\", \"epub\", \"html\", \"image\", \"audio\", \"video\"]"
+        description = "Filter by document type name, as reported in the doc_type field of each search result (e.g. [\"pdf\", \"md\", \"docx\"]). Type name, not extension. This is not a closed set — newly supported types appear there without a schema change."
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -304,7 +337,7 @@ pub struct ListInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "Filter by document types, e.g. [\"pdf\", \"md\", \"xlsx\", \"csv\", \"docx\", \"txt\", \"pptx\", \"doc\", \"rtf\", \"epub\", \"html\", \"image\", \"audio\", \"video\"]. Valid for scope=\"folder\" and scope=\"library\"."
+        description = "Filter by document type name, as reported in the doc_type field of each result (e.g. [\"pdf\", \"md\", \"docx\"]). Type name, not extension. This is not a closed set — newly supported types appear there without a schema change. Valid for scope=\"folder\" and scope=\"library\"."
     )]
     pub doc_types: Option<Vec<String>>,
 
@@ -424,7 +457,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -445,7 +478,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -466,7 +499,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -487,13 +520,13 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
         name = "outline",
         annotations(read_only_hint = true),
-        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: only documents with reliable parsed outlines (e.g. Markdown, DOCX with headings, PPTX slide outlines, EPUB table-of-contents outlines) will show structural outlines; for other documents, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
+        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Recommended for documents >50 lines with has_outline=true — saves multiple read calls by identifying target sections first. Note: has_outline in each search result tells you which documents have a parsed outline; for the rest, use 'grep' to find specific patterns or 'read' for line-by-line browsing."
     )]
     async fn outline(
         &self,
@@ -508,7 +541,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -529,7 +562,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -550,7 +583,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -571,7 +604,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 
     #[tool(
@@ -592,7 +625,7 @@ impl StdioBridgeHandler {
             .await
             .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(self.finish(content))
     }
 }
 

@@ -10,18 +10,35 @@ pub fn print_result(content: &str, json_mode: bool) {
         if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(content) {
             if let Some(obj) = data.as_object_mut() {
                 obj.insert("status".to_string(), serde_json::json!("success"));
+                add_skills_hint(obj);
             }
             println!("{}", data);
         } else {
             // Fallback: wrap as content string (backward compatible with older MCP server)
-            let envelope = serde_json::json!({
+            let mut envelope = serde_json::json!({
                 "status": "success",
                 "content": content,
             });
+            if let Some(obj) = envelope.as_object_mut() {
+                add_skills_hint(obj);
+            }
             println!("{}", envelope);
         }
     } else {
         println!("{}", content);
+    }
+}
+
+/// Attach the skills notice when one is pending.
+///
+/// The field is named without an underscore on purpose. `_`-prefixed keys
+/// mirror MCP's `_meta`, whose whole contract is "the client may ignore this"
+/// — precisely the reading that made agents skip the notice. Errors still do
+/// not carry it: a failure envelope is read to find out what went wrong, and
+/// an unrelated advisory there only dilutes the signal.
+fn add_skills_hint(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(hint) = crate::skills::hint() {
+        obj.insert("skill_notice".to_string(), serde_json::json!(hint));
     }
 }
 
@@ -135,5 +152,25 @@ mod tests {
         let result: anyhow::Result<()> = print_tool_error(&err, true);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "");
+    }
+}
+
+#[cfg(test)]
+mod skills_hint_tests {
+    /// The notice has to reach JSON consumers too — plain-text output is the
+    /// primary path, but an agent that asked for `--json` would otherwise
+    /// never learn its skill is stale.
+    #[test]
+    fn json_envelopes_carry_the_notice() {
+        crate::skills::publish_hint(Some("[linkly] Skills v1.0.0 installed".to_string()));
+
+        let mut obj = serde_json::Map::new();
+        obj.insert("status".into(), serde_json::json!("success"));
+        super::add_skills_hint(&mut obj);
+
+        assert_eq!(
+            obj.get("skill_notice").and_then(|v| v.as_str()),
+            Some("[linkly] Skills v1.0.0 installed")
+        );
     }
 }

@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::connection::{ConnectionInfo, ConnectionMode, RemoteHealthResponse};
 use crate::output;
+use crate::skills::{self, Local};
 use crate::version_check;
 
 /// Local desktop health response schema (GET /health)
@@ -24,6 +25,9 @@ pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
 
 async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let url = format!("{}/health", conn.base_url);
+
+    // Started before the health request so the two round-trips overlap.
+    let skill_check = tokio::spawn(check_skill());
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -115,6 +119,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             "mcp_endpoint": health.mcp_endpoint,
             "doc_count": health.doc_count,
             "index_status": health.index_status,
+            "agent_skill": skill_json(&skill_check.await.unwrap_or_default()),
         });
         if let Some(ref gap) = version_gap {
             obj["version_gap"] = serde_json::json!({
@@ -163,9 +168,101 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             format_number(health.doc_count)
         );
         println!("  {} {}", "Index:".dimmed(), index_display);
+        println!(
+            "  {} {}",
+            "Skill:".dimmed(),
+            skill_display(&skill_check.await.unwrap_or_default())
+        );
     }
 
     Ok(())
+}
+
+/// What `status` reports about the Agent Skill.
+///
+/// Read fresh on every run, with no throttling and no `LINKLY_NO_SKILLS_HINT`
+/// opt-out: the tool-result notice is an interruption and has to be rationed,
+/// but `status` is asked precisely because someone wants the current state.
+#[derive(Default)]
+struct SkillState {
+    local: Option<Local>,
+    latest: Option<semver::Version>,
+}
+
+async fn check_skill() -> SkillState {
+    let local = skills::detect();
+    // Offline is a normal state here; without it we simply cannot say whether
+    // an installed copy is current, and we say so rather than guess.
+    let latest = skills::fetch_latest().await.ok().map(|l| l.version);
+    SkillState {
+        local: Some(local),
+        latest,
+    }
+}
+
+/// A directory holding a working skill that the CLI will never write to, so
+/// `status` names it — otherwise `update` appearing to do nothing is a mystery.
+fn is_legacy(path: &std::path::Path) -> bool {
+    skills::legacy_locations().iter().any(|p| p == path)
+}
+
+fn legacy_suffix(path: &std::path::Path) -> String {
+    if is_legacy(path) {
+        format!(" {}", format!("(legacy path: {})", path.display()).dimmed())
+    } else {
+        String::new()
+    }
+}
+
+fn skill_display(state: &SkillState) -> String {
+    let Some(ref local) = state.local else {
+        return "unknown".dimmed().to_string();
+    };
+    match local {
+        Local::Missing => format!(
+            "{} — run `linkly skills install` ({})",
+            "Not installed".yellow(),
+            skills::DOCS_URL
+        ),
+        Local::Untracked(path) => format!(
+            "{} — run `linkly skills update`{}",
+            "version unknown".yellow(),
+            legacy_suffix(path)
+        ),
+        Local::Unparseable(path) => {
+            format!("{}{}", "version unrecognised".dimmed(), legacy_suffix(path))
+        }
+        Local::Tracked(path, current) => match &state.latest {
+            Some(latest) if latest > current => format!(
+                "v{} {}{}",
+                current,
+                format!("— v{} available, run `linkly skills update`", latest).yellow(),
+                legacy_suffix(path)
+            ),
+            Some(_) => format!("v{}{}", current, legacy_suffix(path)),
+            None => format!(
+                "v{} {}{}",
+                current,
+                "(latest unknown)".dimmed(),
+                legacy_suffix(path)
+            ),
+        },
+    }
+}
+
+fn skill_json(state: &SkillState) -> serde_json::Value {
+    let (installed, path) = match &state.local {
+        None | Some(Local::Missing) => (None, None),
+        Some(Local::Untracked(p)) => (Some("unknown".to_string()), Some(p)),
+        Some(Local::Unparseable(p)) => (Some("unrecognised".to_string()), Some(p)),
+        Some(Local::Tracked(p, v)) => (Some(v.to_string()), Some(p)),
+    };
+    serde_json::json!({
+        "installed": installed,
+        "latest": state.latest.as_ref().map(|v| v.to_string()),
+        "path": path.map(|p| p.display().to_string()),
+        "legacy_path": path.map(|p| is_legacy(p)).unwrap_or(false),
+    })
 }
 
 fn unreachable_message(conn: &ConnectionInfo) -> String {
@@ -190,6 +287,10 @@ fn unreachable_message(conn: &ConnectionInfo) -> String {
 
 async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let url = format!("{}/mcp/health", conn.base_url);
+
+    // The skill is installed locally regardless of which endpoint we talk to,
+    // so remote status reports it too.
+    let skill_check = tokio::spawn(check_skill());
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -272,6 +373,7 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             "cli_version": env!("CARGO_PKG_VERSION"),
             "server_status": health.status,
             "tunnel": tunnel_status,
+            "agent_skill": skill_json(&skill_check.await.unwrap_or_default()),
         });
         println!("{}", obj);
     } else {
@@ -286,6 +388,11 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         println!("  {}  {}", "Server:".dimmed(), health.status);
         println!("  {}  {}", "Tunnel:".dimmed(), tunnel_display);
         println!("  {}  https://mcp.linkly.ai/mcp", "MCP:".dimmed());
+        println!(
+            "  {} {}",
+            "Skill:".dimmed(),
+            skill_display(&skill_check.await.unwrap_or_default())
+        );
     }
 
     Ok(())

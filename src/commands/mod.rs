@@ -29,4 +29,5 @@ pub mod outline;
 pub mod read;
 pub mod search;
 pub mod self_update;
+pub mod skills;
 pub mod status;

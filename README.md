@@ -229,6 +229,52 @@ linkly list-libraries --remote
 linkly self-update
 ```
 
+### Agent Skill
+
+The `linkly-ai` skill teaches agents how to drive these tools. The CLI reports
+its version, installs it, and upgrades it in place:
+
+```bash
+linkly skills status    # installed version, latest published, and where it lives
+linkly skills install   # download and install
+linkly skills update    # upgrade an installed copy, or install a missing one
+```
+
+`linkly status` reports the skill in its main table, checked live on every run.
+That is the reliable place to look; everything below is the nudge for someone
+who did not think to look.
+
+When the skill is missing or out of date, output carries a one-line notice
+addressed to the assistant reading it — what is wrong, what it costs, and to
+ask the user before running the fix. It leads the output rather than trailing
+it, so a long result cannot bury it and a client that truncates cannot drop it.
+Under `--json` it arrives as a `skill_notice` field; over `linkly mcp` it is a
+separate content block ahead of the answer, sent once per process.
+
+A missing skill is reported on every run — deciding it costs one filesystem
+check, and throttling it means one unrelated process can silence it for every
+session in the next four hours. The out-of-date notices do read the update
+server, so those are throttled to once every four hours. To turn it all off:
+
+```bash
+export LINKLY_NO_SKILLS_HINT=1
+```
+
+`linkly mcp` inherits the environment, so setting it in an MCP client's config
+silences the bridge too.
+
+`update` follows the shape of each install: a symlink is left to the store it
+points at, a `git` checkout is reported rather than overwritten, and a real
+directory is replaced with the previous copy moved aside until the new one
+verifies. Only the `linkly-ai` subdirectory is ever touched — the surrounding
+skills directory belongs to whatever else you have installed there.
+
+Detection also looks at `linkly-ai-skills`, the directory name produced by
+installs made during a 37-hour window in March 2026 when `SKILL.md` carried the
+repository name in its `name:` field. Those copies work, so reporting them as
+missing would be a false alarm; `status` labels the path as legacy, and
+`install` / `update` still write only to `linkly-ai`.
+
 ## Connection Modes
 
 The CLI supports three connection modes:

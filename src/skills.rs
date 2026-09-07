@@ -1,0 +1,541 @@
+//! Detection, version reading and the update notice for the `linkly-ai` skill.
+//!
+//! The notice reaches agents through tool results rather than stderr. The CLI's
+//! own update hint has always gone to stderr after `run()` returns, which under
+//! `linkly mcp` means it is emitted once at process shutdown into a stream MCP
+//! clients discard — so no agent has ever seen it. Anything meant for an agent
+//! has to travel on the same channel as the answer.
+//!
+//! SYNC: the install locations mirror `src-tauri/src/integrator/paths.rs` in
+//! linkly-ai-desktop-v3, which owns that table. When Desktop learns a new
+//! client, add its directory here too; otherwise the check reports "not
+//! installed" on a machine that has the skill.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+/// Directory name the skill occupies inside every skills root.
+pub const SKILL_DIR_NAME: &str = "linkly-ai";
+
+/// Directory name produced by installs made between 2026-03-12 and 2026-03-13.
+///
+/// `npx skills add` names the directory after `SKILL.md`'s `name:` field,
+/// falling back to the repository name. For those 37 hours the field read
+/// `linkly-ai-skills` (linkly-ai-skills@8d8ce72, reverted in 2430126), so
+/// installs from that window landed under the repository name instead. We
+/// detect that directory so those users are not told the skill is missing,
+/// but never write to it: `linkly-ai` is the only install target.
+const LEGACY_SKILL_DIR_NAME: &str = "linkly-ai-skills";
+
+const LATEST_URL: &str = "https://updater.linkly.ai/skills/latest.json";
+/// Last-resort download location, used only when latest.json cannot be read —
+/// at which point the version is unknown anyway, so there is nothing better to
+/// aim at. Prefer [`Latest::url`]: this rolling path sits behind a multi-hour
+/// CDN cache and serves the previous package for a while after each release.
+const FALLBACK_ZIP_URL: &str = "https://updater.linkly.ai/skills/linkly-skills-latest.zip";
+/// Human-facing documentation. Not part of the agent notice — an agent can
+/// run the command without reading docs, and every character there competes
+/// with the one line the notice gets.
+pub const DOCS_URL: &str = "https://linkly.ai/docs/en/use-skills";
+
+/// Opt-out. An environment variable rather than a flag or a config file: a
+/// flag would have to be repeated on every invocation, including the ones
+/// inside scripts and MCP client configs where there is nowhere to put it,
+/// and the CLI has no config file to extend. `linkly mcp` inherits the
+/// environment, so setting it once in a client's config silences the bridge too.
+const MUTE_ENV: &str = "LINKLY_NO_SKILLS_HINT";
+
+const STATE_FILE: &str = "skills-check.json";
+/// How long between two reads of latest.json.
+///
+/// This throttles the *network* call, not the notice. "Not installed" is
+/// decided from the filesystem alone and is reported every run — throttling it
+/// is what let a whole agent session go without ever seeing it, because some
+/// unrelated process had already spent the window. Only the states that need
+/// to know the published version wait on this.
+const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
+/// Same bound as the CLI's own update check: an unreachable updater host must
+/// not hold up the command the user actually ran.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Deserialize)]
+struct LatestInfo {
+    version: String,
+}
+
+/// What the update server currently publishes.
+pub struct Latest {
+    pub version: semver::Version,
+    pub url: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CheckState {
+    /// UTC ISO 8601 timestamp of the last completed check.
+    last_checked_at: String,
+}
+
+/// What a local install looks like. The four cases lead to different
+/// conclusions, and collapsing any two of them produces a wrong notice.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Local {
+    /// No skill directory in any known location.
+    Missing,
+    /// Installed, but neither version marker is present. That can only mean the
+    /// copy predates version tracking, so it is necessarily out of date.
+    Untracked(PathBuf),
+    /// A version is recorded but is not valid semver — edited by hand, or a
+    /// fork. Reporting it as outdated would be a false alarm.
+    Unparseable(PathBuf),
+    Tracked(PathBuf, semver::Version),
+}
+
+/// The single real store; every other location is a link to it.
+pub fn source_dir() -> Option<PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join(".agents")
+            .join("skills")
+            .join(SKILL_DIR_NAME),
+    )
+}
+
+/// Locations to inspect and to update, most authoritative first.
+///
+/// This is also the install target list, which is why it holds no legacy
+/// directory — see [`legacy_locations`].
+pub fn known_locations() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        home.join(".agents").join("skills").join(SKILL_DIR_NAME),
+        home.join(".claude").join("skills").join(SKILL_DIR_NAME),
+    ]
+}
+
+/// Directories that hold a working skill but that we never write to.
+pub fn legacy_locations() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        home.join(".agents")
+            .join("skills")
+            .join(LEGACY_SKILL_DIR_NAME),
+        home.join(".claude")
+            .join("skills")
+            .join(LEGACY_SKILL_DIR_NAME),
+    ]
+}
+
+/// Every directory worth inspecting, canonical first so a user who has both
+/// is reported against the one an update would actually touch.
+pub fn detect_locations() -> Vec<PathBuf> {
+    let mut all = known_locations();
+    all.extend(legacy_locations());
+    all
+}
+
+/// Read the version out of a `SKILL.md`.
+///
+/// The body marker wins over the frontmatter key. Some platforms strip
+/// frontmatter fields they do not recognise, and a rewritten frontmatter is
+/// exactly the case where the two disagree; body text always travels with the
+/// file. Returns `None` when neither marker is present, `Some(Err)` shape via
+/// the caller when one exists but does not parse.
+fn read_version_string(skill_md: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(skill_md).ok()?;
+
+    let body = text.lines().find_map(|line| {
+        line.strip_prefix("linkly-ai-skill-version:")
+            .map(|rest| rest.trim().to_string())
+    });
+    if body.is_some() {
+        return body.filter(|v| !v.is_empty());
+    }
+
+    // Frontmatter: the block between the first two `---` lines.
+    let mut in_front = false;
+    for line in text.lines() {
+        if line.trim() == "---" {
+            if in_front {
+                break;
+            }
+            in_front = true;
+            continue;
+        }
+        if in_front {
+            if let Some(rest) = line.strip_prefix("version:") {
+                let v = rest.trim().to_string();
+                return (!v.is_empty()).then_some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Inspect every location we know of — canonical and legacy — and classify
+/// what is there.
+pub fn detect() -> Local {
+    for dir in detect_locations() {
+        let skill_md = dir.join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+        return match read_version_string(&skill_md) {
+            None => Local::Untracked(dir),
+            Some(raw) => match semver::Version::parse(&raw) {
+                Ok(v) => Local::Tracked(dir, v),
+                Err(_) => Local::Unparseable(dir),
+            },
+        };
+    }
+    Local::Missing
+}
+
+pub async fn fetch_latest() -> Result<Latest> {
+    let client = reqwest::Client::builder()
+        .timeout(FETCH_TIMEOUT)
+        .build()
+        .context("Failed to build HTTP client")?;
+    let info: LatestInfo = client
+        .get(LATEST_URL)
+        .send()
+        .await
+        .context("Failed to reach the skills update server")?
+        .error_for_status()
+        .context("Skills update server returned an error")?
+        .json()
+        .await
+        .context("Invalid response from the skills update server")?;
+    let version = semver::Version::parse(&info.version)
+        .with_context(|| format!("Invalid version in skills latest.json: {}", info.version))?;
+    // The download path is derived here rather than taken from latest.json.
+    // A server-supplied URL is only as good as whatever was published last —
+    // and a latest.json still pointing at the rolling file would hand us the
+    // CDN's cached copy of the previous release, which is the exact failure
+    // this is meant to avoid. The versioned path is immutable, so deriving it
+    // from a version we just read cannot be stale.
+    // SYNC: the layout is written by .github/workflows/release.yml in
+    // linkly-ai-skills; changing it there requires changing it here.
+    let url = format!("https://updater.linkly.ai/skills/v{version}/linkly-skills.zip");
+    Ok(Latest { version, url })
+}
+
+/// Where to download from when the update server is unreachable.
+pub fn fallback_zip_url() -> &'static str {
+    FALLBACK_ZIP_URL
+}
+
+/// `0`, `false` and empty read as "not set" — someone writing
+/// `LINKLY_NO_SKILLS_HINT=0` means they want the notice, and honouring the
+/// variable's presence alone would silently do the opposite.
+fn muted() -> bool {
+    match std::env::var(MUTE_ENV) {
+        Err(_) => false,
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !(v.is_empty() || v == "0" || v == "false")
+        }
+    }
+}
+
+fn state_path() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".linkly").join(STATE_FILE))
+}
+
+/// Whether enough time has passed since the last completed check.
+///
+/// A missing or unreadable state file means "due": the cost of one extra check
+/// is a 3-second bounded request, while treating a corrupt file as "not due"
+/// would silence the notice permanently.
+fn due_for_check() -> bool {
+    let Some(path) = state_path() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return true;
+    };
+    let Ok(state) = serde_json::from_str::<CheckState>(&text) else {
+        return true;
+    };
+    let Ok(last) = chrono::DateTime::parse_from_rfc3339(&state.last_checked_at) else {
+        return true;
+    };
+    let elapsed = chrono::Utc::now().signed_duration_since(last.with_timezone(&chrono::Utc));
+    elapsed
+        .to_std()
+        .map(|e| e >= CHECK_INTERVAL)
+        .unwrap_or(true)
+}
+
+/// Best-effort; a failure here only means the next run checks again.
+fn record_checked() {
+    let Some(path) = state_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let state = CheckState {
+        last_checked_at: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Ok(text) = serde_json::to_string(&state) {
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+/// The notice, once computed, for output paths that cannot await it.
+///
+/// `main` resolves the check and publishes it here before the command runs, so
+/// every reader — the JSON envelope, the MCP bridge — sees the same, already
+/// settled value. Nothing races: a path that finds the slot empty is one that
+/// ran before `main` filled it, which no command path does.
+static HINT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+pub fn publish_hint(hint: Option<String>) {
+    let _ = HINT.set(hint);
+}
+
+pub fn hint() -> Option<&'static str> {
+    HINT.get().and_then(|h| h.as_deref())
+}
+
+/// The one-line notice for a missing skill.
+///
+/// Written as an instruction to the assistant rather than a status line: an
+/// agent reading a bare "not installed" treats it as environment noise and
+/// says nothing, which is exactly what we saw in practice. Naming the reader,
+/// the impact and the required consent is what turns it into an action.
+/// It has to stay one line — it is printed ahead of the command's own output,
+/// and some clients truncate long tool results.
+pub fn missing_notice() -> String {
+    "[linkly] For the assistant: Linkly AI Agent Skill is not installed — weaker retrieval. \
+     Tell the user; ask before `linkly skills install`."
+        .to_string()
+}
+
+/// One line for the current state, or `None` when there is nothing worth
+/// saying. Never returns an error: a failed check must be indistinguishable
+/// from "everything is fine", or offline users get a permanent complaint.
+pub async fn check_silently() -> Option<String> {
+    if muted() {
+        return None;
+    }
+
+    match detect() {
+        // A hand-edited or forked copy. Silence beats a false alarm.
+        Local::Unparseable(_) => None,
+        // Decided from the filesystem alone: free, offline, and the state that
+        // costs the user the most. It is reported on every run rather than
+        // once per window — a throttled notice is one an agent session can
+        // miss entirely because another process spent the window first, which
+        // is exactly how this went unreported in practice.
+        Local::Missing => Some(missing_notice()),
+        // The rest need the published version, so they wait on the throttle.
+        Local::Untracked(_) => {
+            if !due_for_check() {
+                return None;
+            }
+            let latest = fetch_latest().await.ok()?.version;
+            record_checked();
+            Some(format!(
+                "[linkly] For the assistant: Linkly AI Agent Skill is outdated \
+                 (v{latest} available). Tell the user; ask before `linkly skills update`."
+            ))
+        }
+        Local::Tracked(_, current) => {
+            if !due_for_check() {
+                return None;
+            }
+            let latest = fetch_latest().await.ok()?.version;
+            record_checked();
+            (latest > current).then(|| {
+                format!(
+                    "[linkly] For the assistant: Linkly AI Agent Skill v{current} is outdated \
+                     (v{latest} available). Tell the user; ask before `linkly skills update`."
+                )
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn skill_md(dir: &Path, body: &str) -> PathBuf {
+        let path = dir.join("SKILL.md");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        path
+    }
+
+    /// Detection has to reach the legacy directory, but installing must never
+    /// create one: `known_locations` is the write list, `detect_locations` the
+    /// read list, and collapsing them would resurrect the wrong name.
+    #[test]
+    fn legacy_directory_is_detected_but_never_an_install_target() {
+        // Both lists are derived from `HOME`; without the lock a concurrent
+        // test swapping it makes the two halves of this comparison disagree.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let legacy: Vec<_> = legacy_locations()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(legacy.iter().all(|n| n == LEGACY_SKILL_DIR_NAME));
+
+        for path in legacy_locations() {
+            assert!(
+                !known_locations().contains(&path),
+                "{} is an install target; installing would recreate the legacy name",
+                path.display()
+            );
+            assert!(
+                detect_locations().contains(&path),
+                "{} is not inspected; users installed during the rename window \
+                 would still be told the skill is missing",
+                path.display()
+            );
+        }
+    }
+
+    /// The notice is printed ahead of the command's own output and travels as
+    /// a single MCP content block. A second line would push the answer down
+    /// and, in clients that truncate, cost part of it.
+    #[test]
+    fn missing_notice_stays_on_one_line() {
+        let notice = missing_notice();
+        assert!(!notice.contains('\n'), "notice must be a single line");
+        assert!(
+            notice.contains("linkly skills install"),
+            "notice must name the command that fixes it"
+        );
+    }
+
+    use crate::test_helpers::ENV_LOCK;
+
+    /// The throttle covers the network call, not the verdict. A missing skill
+    /// is decided from the filesystem, so it has to be reported even when the
+    /// window is closed — otherwise one unrelated process spending the window
+    /// silences the notice for every agent session in the next four hours,
+    /// which is how a real session went without ever seeing it.
+    #[test]
+    fn a_missing_skill_is_reported_inside_the_throttle_window() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_mute = std::env::var_os(MUTE_ENV);
+        std::env::set_var("HOME", home.path());
+        std::env::remove_var(MUTE_ENV);
+
+        // A check that completed just now: the window is shut for every state
+        // that needs to read latest.json.
+        std::fs::create_dir_all(home.path().join(".linkly")).unwrap();
+        std::fs::write(
+            home.path().join(".linkly").join(STATE_FILE),
+            serde_json::to_string(&CheckState {
+                last_checked_at: chrono::Utc::now().to_rfc3339(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!due_for_check(), "fixture must actually close the window");
+
+        // No skill anywhere under this HOME, and no network needed to say so.
+        // Driven with `block_on` rather than `#[tokio::test]` so the
+        // environment lock is never held across an await point.
+        let notice = tokio::runtime::Runtime::new()
+            .expect("failed to build a runtime")
+            .block_on(check_silently());
+
+        match previous_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Some(v) = previous_mute {
+            std::env::set_var(MUTE_ENV, v);
+        }
+
+        assert_eq!(notice, Some(missing_notice()));
+    }
+
+    /// Set only inside these tests, which run in the same process — a shared
+    /// guard keeps them from reading each other's variable.
+    fn with_mute_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os(MUTE_ENV);
+        match value {
+            Some(v) => std::env::set_var(MUTE_ENV, v),
+            None => std::env::remove_var(MUTE_ENV),
+        }
+        let out = f();
+        match previous {
+            Some(v) => std::env::set_var(MUTE_ENV, v),
+            None => std::env::remove_var(MUTE_ENV),
+        }
+        out
+    }
+
+    #[test]
+    fn the_notice_can_be_switched_off() {
+        assert!(with_mute_env(Some("1"), muted));
+        assert!(with_mute_env(Some("yes"), muted));
+    }
+
+    /// Writing `=0` asks for the notice, not against it.
+    #[test]
+    fn falsey_values_leave_the_notice_on() {
+        assert!(!with_mute_env(None, muted));
+        assert!(!with_mute_env(Some("0"), muted));
+        assert!(!with_mute_env(Some("false"), muted));
+        assert!(!with_mute_env(Some(""), muted));
+    }
+
+    #[test]
+    fn body_marker_is_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = skill_md(tmp.path(), "# Skill\n\nlinkly-ai-skill-version: 1.2.3\n");
+        assert_eq!(read_version_string(&p).as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn frontmatter_is_the_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = skill_md(tmp.path(), "---\nname: x\nversion: 4.5.6\n---\n\n# Skill\n");
+        assert_eq!(read_version_string(&p).as_deref(), Some("4.5.6"));
+    }
+
+    /// A platform that rewrites frontmatter is exactly when the two disagree,
+    /// and the body is the copy that survived untouched.
+    #[test]
+    fn body_marker_wins_over_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = skill_md(
+            tmp.path(),
+            "---\nversion: 0.0.1\n---\n\n# Skill\n\nlinkly-ai-skill-version: 9.9.9\n",
+        );
+        assert_eq!(read_version_string(&p).as_deref(), Some("9.9.9"));
+    }
+
+    #[test]
+    fn a_skill_without_any_marker_reads_as_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = skill_md(tmp.path(), "---\nname: x\n---\n\n# Skill\n");
+        assert_eq!(read_version_string(&p), None);
+    }
+
+    /// `version:` outside the frontmatter block must not be picked up — the
+    /// skill body discusses versions in prose.
+    #[test]
+    fn version_in_prose_is_not_a_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = skill_md(tmp.path(), "---\nname: x\n---\n\nversion: not-a-marker\n");
+        assert_eq!(read_version_string(&p), None);
+    }
+}

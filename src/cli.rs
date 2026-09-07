@@ -20,7 +20,9 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// Output in JSON format
+    /// Output in JSON format, for scripts that parse the result. Agents reading
+    /// the output themselves should not pass it — plain text is the default and
+    /// the documented path
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -99,7 +101,7 @@ pub enum Command {
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Filter by document types (comma-separated, e.g. pdf,md,xlsx,csv,docx,txt)
+        /// Filter by document types (comma-separated, e.g. pdf,md,xlsx,csv,docx,doc,pptx,epub,rtf)
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
 
@@ -234,7 +236,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::DirPath)]
         path: Option<String>,
 
-        /// Filter by document types (comma-separated, e.g. pdf,md,xlsx,csv,docx,txt) — --scope folder/library only
+        /// Filter by document types (comma-separated, e.g. pdf,md,xlsx,csv,docx,doc,pptx,epub,rtf) — --scope folder/library only
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
 
@@ -361,6 +363,31 @@ under oh-my-zsh); a bare zsh needs `autoload -Uz compinit && compinit` in
         #[command(subcommand)]
         action: AuthAction,
     },
+
+    /// Install, update, or inspect the linkly-ai agent skill
+    #[command(long_about = "\
+Install, update, or inspect the linkly-ai agent skill.
+
+When an update is available, command output carries a one-line notice, at most
+once every four hours. Set LINKLY_NO_SKILLS_HINT=1 to turn it off. `linkly mcp` inherits
+the environment, so setting it in an MCP client's config silences the bridge
+too.")]
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SkillsAction {
+    /// Show the installed version, the latest published one, and where it lives
+    Status,
+
+    /// Download and install the skill
+    Install,
+
+    /// Update an installed skill, or install it when it is missing
+    Update,
 }
 
 #[derive(Subcommand)]
