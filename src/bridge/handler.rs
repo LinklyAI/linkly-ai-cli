@@ -1139,28 +1139,37 @@ mod tests {
         assert_eq!(ann.open_world_hint, Some(false));
     }
 
-    // The advertised schema — not just deserialization — must carry the eight
-    // legal categories, or a bridge-only client has no way to learn them.
+    // The advertised schema — not just deserialization — must carry exactly
+    // the eight legal categories, or a bridge-only client has no way to learn
+    // them. Exact equality: a missing value, an extra value or a dangling
+    // `$ref` all fail, which a substring scan would not catch.
     #[test]
     fn search_libraries_schema_advertises_category_enum() {
         let remote = StdioBridgeHandler::build_router(true);
         let tool = remote.get("search_libraries").unwrap();
-        let schema = serde_json::to_string(&tool.input_schema).unwrap();
-        for value in [
-            "\"ai-ml\"",
-            "\"programming\"",
-            "\"design\"",
-            "\"science\"",
-            "\"business\"",
-            "\"lifestyle\"",
-            "\"education\"",
-            "\"other\"",
-        ] {
-            assert!(
-                schema.contains(value),
-                "category enum lacks {value}: {schema}"
-            );
-        }
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        assert_eq!(
+            schema["properties"]["category"]["anyOf"],
+            serde_json::json!([{ "$ref": "#/$defs/LibraryCategory" }, { "type": "null" }]),
+            "category must be the LibraryCategory ref or null: {}",
+            schema["properties"]["category"]
+        );
+        assert_eq!(schema["$defs"]["LibraryCategory"]["type"], "string");
+        assert_eq!(
+            schema["$defs"]["LibraryCategory"]["enum"],
+            serde_json::json!([
+                "ai-ml",
+                "programming",
+                "design",
+                "science",
+                "business",
+                "lifestyle",
+                "education",
+                "other"
+            ]),
+            "category enum drifted from the gateway: {}",
+            schema["$defs"]["LibraryCategory"]
+        );
 
         let parsed: SearchLibrariesInput =
             serde_json::from_value(serde_json::json!({ "category": "ai-ml" })).unwrap();
@@ -1273,13 +1282,16 @@ mod tests {
         assert!(mapped.message.starts_with("Bridge error: "));
         assert!(mapped.message.contains("cloud gateway"));
         assert!(mapped.message.contains("Retry later"));
-        for forbidden in ["Desktop", "desktop may", "tunnel is", "doctor"] {
-            assert!(
-                !mapped.message.contains(forbidden),
-                "message leaks `{forbidden}`: {}",
-                mapped.message
-            );
-        }
+        // None of the desktop-flavoured upstream phrases may leak through; the
+        // message names the desktop only to say it is not involved.
+        assert!(!mapped.message.contains("Desktop"), "{}", mapped.message);
+        assert!(
+            !mapped.message.contains("desktop may"),
+            "{}",
+            mapped.message
+        );
+        assert!(!mapped.message.contains("tunnel is"), "{}", mapped.message);
+        assert!(!mapped.message.contains("doctor"), "{}", mapped.message);
         assert_eq!(mapped.data, None);
     }
 
