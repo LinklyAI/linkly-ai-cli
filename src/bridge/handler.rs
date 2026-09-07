@@ -93,7 +93,19 @@ fn bridge_error(err: anyhow::Error) -> McpError {
             tool_err.message.clone(),
             tool_err.data.clone(),
         ),
-        None => McpError::internal_error(format!("Bridge error: {}", err), None),
+        // Transport / timeout / serialization. The client's generic text is
+        // written for the desktop upstream ("Desktop may have disconnected",
+        // `linkly doctor` hints); these tools never involve the desktop, so
+        // that advice is wrong here. Keep the detail on stderr for diagnosis
+        // and give the model cloud-side guidance only.
+        None => {
+            eprintln!("linkly mcp: cloud-only tool call failed upstream: {err:#}");
+            McpError::internal_error(
+                "Bridge error: the request to the cloud gateway failed or timed out before a reply arrived. \
+                 Retry later with the same arguments; this tool talks only to the cloud gateway, so the desktop app and its tunnel are not involved.",
+                None,
+            )
+        }
     }
 }
 
@@ -469,6 +481,24 @@ pub struct NoteSaveInput {
 // `Option<T>` + `serde(default)` so an explicit `null` parses; unset ones are omitted from the
 // forwarded args, which the gateway treats the same as `null`.
 
+/// The gateway's closed category set (mirrors the `category` enum in
+/// linkly-ai-api tools-registry.ts and the DB CHECK constraint). Declared as an
+/// enum so the bridge's tools/list schema carries the legal values — a client
+/// that only sees the bridge would otherwise send `category: "AI"` and get a
+/// -32602 from the gateway with no hint of what is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum LibraryCategory {
+    AiMl,
+    Programming,
+    Design,
+    Science,
+    Business,
+    Lifestyle,
+    Education,
+    Other,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchLibrariesInput {
@@ -482,7 +512,7 @@ pub struct SearchLibrariesInput {
     #[schemars(
         description = "Restrict to one library category. Omit or send null for all categories."
     )]
-    pub category: Option<String>,
+    pub category: Option<LibraryCategory>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
@@ -726,7 +756,7 @@ impl StdioBridgeHandler {
 impl StdioBridgeHandler {
     #[tool(
         name = "search_libraries",
-        annotations(read_only_hint = true),
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Search the catalog of cloud knowledge libraries on Linkly AI — including libraries you have NOT linked yet — by title, description or owner username, optionally filtered by category. Use it when the user wants to FIND a cloud library (\"find a Rust knowledge base\", \"is there a library about X\", \"my own cloud libraries\"); then call `link_library` on a result to make it searchable, and `search` / `explore` / `list` with `library=\"cloud://owner/slug\"` to use it.\n\nDo NOT use this to search documents — for content inside libraries call `search`. Do NOT use it to see what is already searchable — call `list_libraries` for that. Results cover active Public and Showcase libraries plus Private libraries you own or were invited to; each entry carries the exact `cloud://owner/slug` to pass on, `is_linked` (already searchable — do not link again) and `can_link` with the reason when linking is not allowed. Read-only: nothing is linked, starred or changed. Sorted by last update, newest first; paginate with `offset` and `has_more` — if the catalog changes between pages, entries can shift."
     )]
     async fn search_libraries(
@@ -752,7 +782,8 @@ impl StdioBridgeHandler {
         annotations(
             read_only_hint = false,
             destructive_hint = false,
-            idempotent_hint = true
+            idempotent_hint = true,
+            open_world_hint = false
         ),
         description = "Link a cloud knowledge library to this account so it becomes searchable through this MCP server: it appears in `list_libraries` immediately, and `search` / `explore` / `list` accept its `cloud://owner/slug` right away. Pass the exact `library` reference from a `search_libraries` result — always the full `cloud://owner/slug` form; bare names, `local://` references and document ids are rejected.\n\nWho can link: Public libraries — any signed-in user; Showcase and Private libraries — the owner or an invited reader only (the tool answers invite_required, or not_found for a private library you cannot see). Linking the same library again is safe and answers already_linked without using another Slot. Every link uses one Slot (Free plan: 1, Pro: 99). When the quota is full the tool answers slot_exhausted with the current count, the limit and an upgrade link — do NOT unlink other libraries on the user's behalf; tell the user and let them decide. Do NOT call this for a library that is already linked (check `is_linked` in `search_libraries` or the list in `list_libraries`), and never use it to search anything — it only writes the link."
     )]
@@ -1096,6 +1127,8 @@ mod tests {
         assert_eq!(ann.read_only_hint, Some(false));
         assert_eq!(ann.destructive_hint, Some(false));
         assert_eq!(ann.idempotent_hint, Some(true));
+        // Closed world, same as every other tool the gateway declares.
+        assert_eq!(ann.open_world_hint, Some(false));
         let ann = remote
             .get("search_libraries")
             .unwrap()
@@ -1103,6 +1136,47 @@ mod tests {
             .clone()
             .expect("annotations");
         assert_eq!(ann.read_only_hint, Some(true));
+        assert_eq!(ann.open_world_hint, Some(false));
+    }
+
+    // The advertised schema — not just deserialization — must carry the eight
+    // legal categories, or a bridge-only client has no way to learn them.
+    #[test]
+    fn search_libraries_schema_advertises_category_enum() {
+        let remote = StdioBridgeHandler::build_router(true);
+        let tool = remote.get("search_libraries").unwrap();
+        let schema = serde_json::to_string(&tool.input_schema).unwrap();
+        for value in [
+            "\"ai-ml\"",
+            "\"programming\"",
+            "\"design\"",
+            "\"science\"",
+            "\"business\"",
+            "\"lifestyle\"",
+            "\"education\"",
+            "\"other\"",
+        ] {
+            assert!(
+                schema.contains(value),
+                "category enum lacks {value}: {schema}"
+            );
+        }
+
+        let parsed: SearchLibrariesInput =
+            serde_json::from_value(serde_json::json!({ "category": "ai-ml" })).unwrap();
+        assert_eq!(parsed.category, Some(LibraryCategory::AiMl));
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap(),
+            serde_json::json!({ "category": "ai-ml" }),
+            "forwarded value must be the gateway's kebab-case id"
+        );
+        assert!(serde_json::from_value::<SearchLibrariesInput>(
+            serde_json::json!({ "category": "AI" })
+        )
+        .is_err());
+        let parsed: SearchLibrariesInput =
+            serde_json::from_value(serde_json::json!({ "category": null })).unwrap();
+        assert_eq!(parsed.category, None);
     }
 
     #[test]
@@ -1186,11 +1260,26 @@ mod tests {
             .contains("cloud://"));
     }
 
+    // The client's real timeout text carries desktop-flavoured advice
+    // ("Desktop may have disconnected", `linkly doctor`); cloud-only tools must
+    // not surface it — the desktop is not involved in these calls.
     #[test]
-    fn bridge_error_maps_transport_failures_to_internal_error() {
-        let mapped = bridge_error(anyhow::anyhow!("Request timed out after 60 seconds"));
+    fn bridge_error_maps_transport_failures_to_cloud_guidance() {
+        let upstream = anyhow::anyhow!(
+            "Request timed out after 60 seconds. Desktop may have disconnected or the operation is taking too long.\n\nRun 'linkly doctor --remote' to diagnose remote connection issues."
+        );
+        let mapped = bridge_error(upstream);
         assert_eq!(mapped.code.0, -32603);
         assert!(mapped.message.starts_with("Bridge error: "));
+        assert!(mapped.message.contains("cloud gateway"));
+        assert!(mapped.message.contains("Retry later"));
+        for forbidden in ["Desktop", "desktop may", "tunnel is", "doctor"] {
+            assert!(
+                !mapped.message.contains(forbidden),
+                "message leaks `{forbidden}`: {}",
+                mapped.message
+            );
+        }
         assert_eq!(mapped.data, None);
     }
 
