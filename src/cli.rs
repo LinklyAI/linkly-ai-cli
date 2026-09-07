@@ -101,7 +101,7 @@ pub enum Command {
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Filter by document types (comma-separated, e.g. pdf,md,docx,doc,pptx,epub,rtf)
+        /// Filter by document types (comma-separated, e.g. pdf,md,xlsx,csv,docx,doc,pptx,epub,rtf)
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
 
@@ -236,7 +236,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::DirPath)]
         path: Option<String>,
 
-        /// Filter by document types (comma-separated, e.g. pdf,md,docx,doc,pptx,epub,rtf) — --scope folder/library only
+        /// Filter by document types (comma-separated, e.g. pdf,md,xlsx,csv,docx,doc,pptx,epub,rtf) — --scope folder/library only
         #[arg(long, value_delimiter = ',')]
         r#type: Option<Vec<String>>,
 

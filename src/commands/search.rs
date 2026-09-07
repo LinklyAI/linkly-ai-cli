@@ -165,6 +165,16 @@ mod tests {
     }
 
     #[test]
+    fn xlsx_and_csv_are_accepted() {
+        assert_eq!(
+            validate_doc_types(Some(vec!["xlsx".into(), "CSV".into()])),
+            Ok(Some(vec!["xlsx".into(), "csv".into()]))
+        );
+        // Spreadsheet containers the desktop does not scan stay rejected.
+        assert!(validate_doc_types(Some(vec!["xls".into()])).is_err());
+    }
+
+    #[test]
     fn epub_is_accepted() {
         assert_eq!(
             validate_doc_types(Some(vec!["epub".into()])),
