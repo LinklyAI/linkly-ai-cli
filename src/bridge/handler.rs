@@ -1442,10 +1442,11 @@ mod tests {
         assert_eq!(mapped.data, None);
     }
 
-    /// Stand-in for the cloud gateway: answers `link_library` over real
-    /// JSON-RPC with the gateway's error shapes, keyed by the library
-    /// reference, so the tests below exercise the handler, the client and
-    /// the error mapping together rather than the mapping alone.
+    /// Stand-in for the cloud gateway: answers `link_library` and
+    /// `search_libraries` over real JSON-RPC with the gateway's error shapes,
+    /// keyed by the `library` reference (link) or the `query` text (search),
+    /// so the tests below exercise the handler, the client and the error
+    /// mapping together rather than the mapping alone.
     #[derive(Clone)]
     struct FakeGateway;
 
@@ -1455,15 +1456,19 @@ mod tests {
             request: rmcp::model::CallToolRequestParams,
             _context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<CallToolResult, McpError> {
-            assert_eq!(request.name, "link_library");
-            let library = request
+            let key_field = match &*request.name {
+                "link_library" => "library",
+                "search_libraries" => "query",
+                other => panic!("the fake gateway only serves the two #77 tools, got {other}"),
+            };
+            let key = request
                 .arguments
                 .as_ref()
-                .and_then(|args| args.get("library"))
+                .and_then(|args| args.get(key_field))
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .to_string();
-            Err(match library.as_str() {
+            Err(match key.as_str() {
                 "cloud://t77alice/t77-pub" => McpError::new(
                     rmcp::model::ErrorCode(-32000),
                     SLOT_EXHAUSTED_MESSAGE,
@@ -1562,6 +1567,42 @@ mod tests {
         assert_eq!(err.code.0, -32602);
         assert_eq!(err.message, INVALID_PARAMS_MESSAGE);
         assert_eq!(err.data, Some(invalid_params_data()));
+    }
+
+    async fn search_over_bridge(query: &str) -> McpError {
+        let bridge = bridge_over_fake_gateway().await;
+        bridge
+            .search_libraries(Parameters(SearchLibrariesInput {
+                query: Some(query.to_string()),
+                category: None,
+                owner: None,
+                limit: None,
+                offset: None,
+                output_format: None,
+            }))
+            .await
+            .expect_err("the fake gateway answers every search with an error")
+    }
+
+    // `search_libraries` shares `bridge_error` with `link_library`, but its
+    // handler body is separate: a regression that wraps its upstream error
+    // into a bare internal error would slip past the link tests above.
+    #[tokio::test]
+    async fn search_libraries_round_trip_keeps_invalid_params_intact() {
+        let err = search_over_bridge("t77alice/t77-pub").await;
+        assert_eq!(err.code.0, -32602);
+        assert_eq!(err.message, INVALID_PARAMS_MESSAGE);
+        assert_eq!(err.data, Some(invalid_params_data()));
+    }
+
+    // Any gateway error with structured `data` must come back untouched; the
+    // slot fixture is the richest shape the gateway emits.
+    #[tokio::test]
+    async fn search_libraries_round_trip_keeps_gateway_code_and_data_intact() {
+        let err = search_over_bridge("cloud://t77alice/t77-pub").await;
+        assert_eq!(err.code.0, -32000);
+        assert_eq!(err.message, SLOT_EXHAUSTED_MESSAGE);
+        assert_eq!(err.data, Some(slot_exhausted_data()));
     }
 
     #[test]
