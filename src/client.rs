@@ -116,6 +116,19 @@ impl McpClient {
         Ok(Self { service })
     }
 
+    /// Test-only: run the client over any rmcp transport — an in-process pipe
+    /// to a fake upstream — so the bridge handlers can be exercised end to end
+    /// through real JSON-RPC without an HTTP server.
+    #[cfg(test)]
+    pub(crate) async fn from_transport<T, E, A>(transport: T) -> Result<Self>
+    where
+        T: rmcp::transport::IntoTransport<RoleClient, E, A>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let service = CliClientHandler.serve(transport).await?;
+        Ok(Self { service })
+    }
+
     /// Call a tool by name with JSON arguments, returning the text content.
     pub async fn call_tool(
         &self,

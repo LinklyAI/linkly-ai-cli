@@ -11,6 +11,9 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use rmcp::service::ServiceError;
+use rmcp::transport::streamable_http_client::StreamableHttpError;
+
 use crate::client::{McpClient, ToolError};
 use crate::connection::ConnectionInfo;
 
@@ -87,25 +90,57 @@ impl StdioBridgeHandler {
 /// act on. Rebuild the original error instead; only genuine transport /
 /// serialization failures become internal errors.
 fn bridge_error(err: anyhow::Error) -> McpError {
-    match err.downcast_ref::<ToolError>() {
-        Some(tool_err) => McpError::new(
+    if let Some(tool_err) = err.downcast_ref::<ToolError>() {
+        return McpError::new(
             rmcp::model::ErrorCode(tool_err.code),
             tool_err.message.clone(),
             tool_err.data.clone(),
+        );
+    }
+
+    // Transport / timeout / serialization. The client's generic text is
+    // written for the desktop upstream ("Desktop may have disconnected",
+    // `linkly doctor` hints); these tools never involve the desktop, so
+    // that advice is wrong here. Keep the detail on stderr for diagnosis
+    // and give the model cloud-side guidance only.
+    eprintln!("linkly mcp: cloud-only tool call failed upstream: {err:#}");
+    match upstream_http_status(&err) {
+        // The gateway authenticates every request, so a key revoked (401) or
+        // stripped of its `mcp` scope (403) after the bridge started fails
+        // here, not at connect time. The bridge keeps using the credential it
+        // started with, so retrying cannot recover — only a new key and a
+        // restart can.
+        Some(status @ (401 | 403)) => McpError::internal_error(
+            format!(
+                "Bridge error: the cloud gateway rejected this connection's credentials (HTTP {status}). \
+                 Retrying with the same arguments cannot succeed: the API key was revoked or lost its `mcp` permission after `linkly mcp --remote` started. \
+                 Ask the user to create a new API key in the Linkly AI dashboard, put it in the client configuration and restart the bridge; the desktop app and its tunnel are not involved."
+            ),
+            None,
         ),
-        // Transport / timeout / serialization. The client's generic text is
-        // written for the desktop upstream ("Desktop may have disconnected",
-        // `linkly doctor` hints); these tools never involve the desktop, so
-        // that advice is wrong here. Keep the detail on stderr for diagnosis
-        // and give the model cloud-side guidance only.
-        None => {
-            eprintln!("linkly mcp: cloud-only tool call failed upstream: {err:#}");
-            McpError::internal_error(
-                "Bridge error: the request to the cloud gateway failed or timed out before a reply arrived. \
-                 Retry later with the same arguments; this tool talks only to the cloud gateway, so the desktop app and its tunnel are not involved.",
-                None,
-            )
-        }
+        _ => McpError::internal_error(
+            "Bridge error: the request to the cloud gateway failed or timed out before a reply arrived. \
+             Retry later with the same arguments; this tool talks only to the cloud gateway, so the desktop app and its tunnel are not involved.",
+            None,
+        ),
+    }
+}
+
+/// HTTP status of a failed upstream call when the gateway refused the request
+/// at the HTTP layer instead of answering with JSON-RPC. `McpClient::call_tool`
+/// keeps the `ServiceError` intact in the anyhow chain, and the reqwest
+/// transport reports a non-2xx POST as a client error carrying the status.
+fn upstream_http_status(err: &anyhow::Error) -> Option<u16> {
+    let ServiceError::TransportSend(transport) = err.downcast_ref::<ServiceError>()? else {
+        return None;
+    };
+    match transport
+        .error
+        .downcast_ref::<StreamableHttpError<reqwest::Error>>()?
+    {
+        StreamableHttpError::Client(http) => http.status().map(|status| status.as_u16()),
+        StreamableHttpError::AuthRequired(_) => Some(401),
+        _ => None,
     }
 }
 
@@ -1223,50 +1258,85 @@ mod tests {
         assert_eq!(parsed.library, "cloud://a/b");
     }
 
+    // The four gateway error shapes the bridge must pass through untouched.
+    // One definition each: the fake gateway below answers with them and the
+    // assertions compare against them, so a drift in either side fails.
+    fn slot_exhausted_data() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "slot_exhausted",
+            "current": 1,
+            "limit": 1,
+            "is_pro": false,
+            "upgrade_url": "https://linkly.ai/dashboard/libraries",
+            "guidance": ["Tell the user the link quota is full; do not unlink anything on their behalf."]
+        })
+    }
+
+    fn invite_required_data() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "invite_required",
+            "guidance": ["Ask the owner for an invitation, then call link_library again."]
+        })
+    }
+
+    fn not_found_data() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "not_found",
+            "guidance": ["Search by owner first: search_libraries({ owner: \"t77alice\" })."]
+        })
+    }
+
+    fn invalid_params_data() -> serde_json::Value {
+        serde_json::json!({
+            "reason": "library must be exactly cloud://<owner>/<slug>",
+            "guidance": ["Pass the cloud:// reference exactly as search_libraries returned it."]
+        })
+    }
+
+    const SLOT_EXHAUSTED_MESSAGE: &str = "Link quota exhausted — the library was not linked.";
+    const INVITE_REQUIRED_MESSAGE: &str = "Invitation required to link this library.";
+    const NOT_FOUND_MESSAGE: &str = "Cloud library not found for link_library.";
+    const INVALID_PARAMS_MESSAGE: &str = "Invalid arguments for link_library.";
+
     // The gateway's structured errors (slot_exhausted, invite_required, not_found,
-    // invalid params) must reach the MCP client with their code and data intact.
+    // invalid params) must reach the MCP client with code, message and data intact.
     #[test]
     fn bridge_error_keeps_gateway_code_and_data() {
-        let data = serde_json::json!({ "kind": "slot_exhausted", "current": 1, "limit": 1, "is_pro": false, "upgrade_url": "https://linkly.ai/pricing", "guidance": ["x"] });
-        let err = anyhow::Error::from(ToolError {
+        let mapped = bridge_error(anyhow::Error::from(ToolError {
             code: -32000,
-            message: "Link quota exhausted — the library was not linked.".to_string(),
-            data: Some(data.clone()),
-        });
-        let mapped = bridge_error(err);
+            message: SLOT_EXHAUSTED_MESSAGE.to_string(),
+            data: Some(slot_exhausted_data()),
+        }));
         assert_eq!(mapped.code.0, -32000);
-        assert_eq!(
-            mapped.message,
-            "Link quota exhausted — the library was not linked."
-        );
-        assert_eq!(mapped.data, Some(data));
+        assert_eq!(mapped.message, SLOT_EXHAUSTED_MESSAGE);
+        assert_eq!(mapped.data, Some(slot_exhausted_data()));
 
-        let invite = bridge_error(anyhow::Error::from(ToolError {
+        let mapped = bridge_error(anyhow::Error::from(ToolError {
             code: -32000,
-            message: "Invitation required to link this library.".to_string(),
-            data: Some(serde_json::json!({ "kind": "invite_required" })),
+            message: INVITE_REQUIRED_MESSAGE.to_string(),
+            data: Some(invite_required_data()),
         }));
-        assert_eq!(invite.data.unwrap()["kind"], "invite_required");
+        assert_eq!(mapped.code.0, -32000);
+        assert_eq!(mapped.message, INVITE_REQUIRED_MESSAGE);
+        assert_eq!(mapped.data, Some(invite_required_data()));
 
-        let not_found = bridge_error(anyhow::Error::from(ToolError {
+        let mapped = bridge_error(anyhow::Error::from(ToolError {
             code: -32002,
-            message: "Cloud library not found for link_library.".to_string(),
-            data: Some(serde_json::json!({ "kind": "not_found" })),
+            message: NOT_FOUND_MESSAGE.to_string(),
+            data: Some(not_found_data()),
         }));
-        assert_eq!(not_found.code.0, -32002);
+        assert_eq!(mapped.code.0, -32002);
+        assert_eq!(mapped.message, NOT_FOUND_MESSAGE);
+        assert_eq!(mapped.data, Some(not_found_data()));
 
-        let invalid = bridge_error(anyhow::Error::from(ToolError {
+        let mapped = bridge_error(anyhow::Error::from(ToolError {
             code: -32602,
-            message: "Invalid arguments for link_library.".to_string(),
-            data: Some(
-                serde_json::json!({ "reason": "library must be exactly cloud://<owner>/<slug>" }),
-            ),
+            message: INVALID_PARAMS_MESSAGE.to_string(),
+            data: Some(invalid_params_data()),
         }));
-        assert_eq!(invalid.code.0, -32602);
-        assert!(invalid.data.unwrap()["reason"]
-            .as_str()
-            .unwrap()
-            .contains("cloud://"));
+        assert_eq!(mapped.code.0, -32602);
+        assert_eq!(mapped.message, INVALID_PARAMS_MESSAGE);
+        assert_eq!(mapped.data, Some(invalid_params_data()));
     }
 
     // The client's real timeout text carries desktop-flavoured advice
@@ -1293,6 +1363,205 @@ mod tests {
         assert!(!mapped.message.contains("tunnel is"), "{}", mapped.message);
         assert!(!mapped.message.contains("doctor"), "{}", mapped.message);
         assert_eq!(mapped.data, None);
+    }
+
+    // Answer exactly one HTTP request on a loopback port with the given status
+    // line and no body, and hand back the real `reqwest::Error` the client
+    // produces for it — the same value the rmcp transport wraps.
+    async fn http_status_error(status_line: &'static str) -> reqwest::Error {
+        let listener =
+            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("read the bound address");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().expect("accept the client's request");
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request);
+            let response =
+                format!("{status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write the canned response");
+        });
+        reqwest::Client::new()
+            .post(format!("http://{addr}/mcp"))
+            .body("{}")
+            .send()
+            .await
+            .expect("the canned server answers")
+            .error_for_status()
+            .expect_err("a non-2xx status is an error")
+    }
+
+    fn transport_send_error(http: reqwest::Error) -> anyhow::Error {
+        anyhow::Error::from(ServiceError::TransportSend(
+            rmcp::transport::DynamicTransportError {
+                transport_name: "streamable-http-client".into(),
+                transport_type_id: std::any::TypeId::of::<()>(),
+                error: Box::new(StreamableHttpError::<reqwest::Error>::Client(http)),
+            },
+        ))
+    }
+
+    // A key revoked while the bridge is running surfaces as an HTTP 401 on the
+    // next call — an HTTP-layer rejection, not a JSON-RPC error. The bridge
+    // still holds the old credential, so "retry later" can never recover; the
+    // message must say what actually fixes it and still keep the desktop out.
+    #[tokio::test]
+    async fn bridge_error_names_revoked_credentials_instead_of_retry() {
+        let http = http_status_error("HTTP/1.1 401 Unauthorized").await;
+        assert_eq!(http.status().map(|status| status.as_u16()), Some(401));
+
+        let mapped = bridge_error(transport_send_error(http));
+        assert_eq!(mapped.code.0, -32603);
+        assert!(mapped.message.starts_with("Bridge error: "));
+        assert!(mapped.message.contains("HTTP 401"), "{}", mapped.message);
+        assert!(mapped.message.contains("new API key"), "{}", mapped.message);
+        assert!(mapped.message.contains("restart"), "{}", mapped.message);
+        assert!(
+            !mapped.message.contains("Retry later"),
+            "{}",
+            mapped.message
+        );
+        assert!(!mapped.message.contains("Desktop"), "{}", mapped.message);
+        assert!(!mapped.message.contains("doctor"), "{}", mapped.message);
+        assert_eq!(mapped.data, None);
+    }
+
+    // A gateway outage is the transient case: the generic retry guidance
+    // stays, and the credential advice must not appear.
+    #[tokio::test]
+    async fn bridge_error_keeps_retry_guidance_for_gateway_outages() {
+        let http = http_status_error("HTTP/1.1 503 Service Unavailable").await;
+        assert_eq!(http.status().map(|status| status.as_u16()), Some(503));
+
+        let mapped = bridge_error(transport_send_error(http));
+        assert_eq!(mapped.code.0, -32603);
+        assert!(mapped.message.contains("Retry later"), "{}", mapped.message);
+        assert!(!mapped.message.contains("API key"), "{}", mapped.message);
+        assert_eq!(mapped.data, None);
+    }
+
+    /// Stand-in for the cloud gateway: answers `link_library` over real
+    /// JSON-RPC with the gateway's error shapes, keyed by the library
+    /// reference, so the tests below exercise the handler, the client and
+    /// the error mapping together rather than the mapping alone.
+    #[derive(Clone)]
+    struct FakeGateway;
+
+    impl ServerHandler for FakeGateway {
+        async fn call_tool(
+            &self,
+            request: rmcp::model::CallToolRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<CallToolResult, McpError> {
+            assert_eq!(request.name, "link_library");
+            let library = request
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("library"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Err(match library.as_str() {
+                "cloud://t77alice/t77-pub" => McpError::new(
+                    rmcp::model::ErrorCode(-32000),
+                    SLOT_EXHAUSTED_MESSAGE,
+                    Some(slot_exhausted_data()),
+                ),
+                "cloud://t77alice/t77-show" => McpError::new(
+                    rmcp::model::ErrorCode(-32000),
+                    INVITE_REQUIRED_MESSAGE,
+                    Some(invite_required_data()),
+                ),
+                "cloud://t77alice/t77-priv" => McpError::new(
+                    rmcp::model::ErrorCode(-32002),
+                    NOT_FOUND_MESSAGE,
+                    Some(not_found_data()),
+                ),
+                _ => McpError::new(
+                    rmcp::model::ErrorCode(-32602),
+                    INVALID_PARAMS_MESSAGE,
+                    Some(invalid_params_data()),
+                ),
+            })
+        }
+    }
+
+    fn remote_connection() -> ConnectionInfo {
+        ConnectionInfo {
+            mcp_url: "https://mcp.linkly.ai/mcp".to_string(),
+            base_url: "https://mcp.linkly.ai".to_string(),
+            auth_header: Some("Bearer lkai_test".to_string()),
+            is_remote: true,
+            mode: crate::connection::ConnectionMode::Remote,
+        }
+    }
+
+    // Wire a remote-mode bridge to the fake gateway over an in-process pipe:
+    // the client side runs the real initialize handshake and the real
+    // `tools/call` request the production bridge sends.
+    async fn bridge_over_fake_gateway() -> StdioBridgeHandler {
+        use rmcp::ServiceExt;
+
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let server = FakeGateway
+                .serve(server_io)
+                .await
+                .expect("the fake gateway completes initialize");
+            let _ = server.waiting().await;
+        });
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            McpClient::from_transport(client_io),
+        )
+        .await
+        .expect("initialize finishes well within the budget")
+        .expect("the bridge client initializes against the fake gateway");
+        StdioBridgeHandler::new(client, remote_connection())
+    }
+
+    async fn link_over_bridge(library: &str) -> McpError {
+        let bridge = bridge_over_fake_gateway().await;
+        bridge
+            .link_library(Parameters(LinkLibraryInput {
+                library: library.to_string(),
+            }))
+            .await
+            .expect_err("the fake gateway answers every link with an error")
+    }
+
+    #[tokio::test]
+    async fn link_library_round_trip_keeps_slot_exhausted_intact() {
+        let err = link_over_bridge("cloud://t77alice/t77-pub").await;
+        assert_eq!(err.code.0, -32000);
+        assert_eq!(err.message, SLOT_EXHAUSTED_MESSAGE);
+        assert_eq!(err.data, Some(slot_exhausted_data()));
+    }
+
+    #[tokio::test]
+    async fn link_library_round_trip_keeps_invite_required_intact() {
+        let err = link_over_bridge("cloud://t77alice/t77-show").await;
+        assert_eq!(err.code.0, -32000);
+        assert_eq!(err.message, INVITE_REQUIRED_MESSAGE);
+        assert_eq!(err.data, Some(invite_required_data()));
+    }
+
+    #[tokio::test]
+    async fn link_library_round_trip_keeps_not_found_intact() {
+        let err = link_over_bridge("cloud://t77alice/t77-priv").await;
+        assert_eq!(err.code.0, -32002);
+        assert_eq!(err.message, NOT_FOUND_MESSAGE);
+        assert_eq!(err.data, Some(not_found_data()));
+    }
+
+    #[tokio::test]
+    async fn link_library_round_trip_keeps_invalid_params_intact() {
+        let err = link_over_bridge("t77alice/t77-pub").await;
+        assert_eq!(err.code.0, -32602);
+        assert_eq!(err.message, INVALID_PARAMS_MESSAGE);
+        assert_eq!(err.data, Some(invalid_params_data()));
     }
 
     #[test]
