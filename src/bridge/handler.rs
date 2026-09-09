@@ -829,7 +829,7 @@ impl StdioBridgeHandler {
             idempotent_hint = true,
             open_world_hint = false
         ),
-        description = "Link a cloud knowledge library to this account so it becomes searchable through this MCP server: it appears in `list_libraries` immediately, and `search` / `explore` / `list` accept its `cloud://owner/slug` right away. Pass the exact `library` reference from a `search_libraries` result — always the full `cloud://owner/slug` form; bare names, `local://` references and document ids are rejected.\n\nWho can link: Public libraries — any signed-in user; Showcase and Private libraries — the owner or an invited reader only (the tool answers invite_required, or not_found for a private library you cannot see). Linking the same library again is safe and answers already_linked without using another Slot. Every link uses one Slot (Free plan: 1, Pro: 99). When the quota is full the tool answers slot_exhausted with the current count, the limit and an upgrade link — do NOT unlink other libraries on the user's behalf; tell the user and let them decide. Do NOT call this for a library that is already linked (check `is_linked` in `search_libraries` or the list in `list_libraries`), and never use it to search anything — it only writes the link."
+        description = "Link a cloud knowledge library to this account so it becomes searchable through this MCP server: it appears in `list_libraries` immediately, and `search` / `explore` / `list` accept its `cloud://owner/slug` right away. Pass the exact `library` reference from a `search_libraries` result — always the full `cloud://owner/slug` form; bare names, `local://` references and document ids are rejected.\n\nWho can link: Public libraries — any signed-in user; Showcase and Private libraries — the owner or an invited reader only (the tool answers invite_required, or not_found for a private library you cannot see). Linking the same library again is safe and answers already_linked without using another Slot. Every link uses one Slot (Free plan: 1, Pro: 99). When the quota is full the tool answers slot_exhausted with the current count, the limit and an upgrade link — do NOT pick a library to unlink yourself: show the user their linked libraries (`list_libraries`), let them name the one to release, then call `unlink_library` on it and retry. Do NOT call this for a library that is already linked (check `is_linked` in `search_libraries` or the list in `list_libraries`), and never use it to search anything — it only writes the link."
     )]
     async fn link_library(
         &self,
@@ -1604,6 +1604,30 @@ mod tests {
             }))
             .await
             .expect_err("the fake gateway answers every unlink with an error")
+    }
+
+    // The description is a copy of the gateway's (tools-registry.ts is the
+    // authority); #112 changed its Slot-full sentence, and a stale copy here
+    // would tell remote agents the opposite of REMOTE_INSTRUCTIONS.
+    #[test]
+    fn link_library_description_matches_gateway_slot_full_guidance() {
+        let remote = StdioBridgeHandler::build_router(true);
+        let description = remote
+            .get("link_library")
+            .unwrap()
+            .description
+            .clone()
+            .expect("description");
+        assert!(description.contains("then call `unlink_library` on it and retry"));
+        assert!(!description.contains("do NOT unlink other libraries on the user's behalf"));
+        let unlink = remote
+            .get("unlink_library")
+            .unwrap()
+            .description
+            .clone()
+            .expect("description");
+        assert!(unlink.contains("Call this ONLY when the user has named the library to release"));
+        assert!(unlink.contains("never choose on their behalf"));
     }
 
     #[test]
