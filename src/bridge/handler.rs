@@ -1476,7 +1476,11 @@ mod tests {
     /// so the tests below exercise the handler, the client and the error
     /// mapping together rather than the mapping alone.
     #[derive(Clone)]
-    struct FakeGateway;
+    struct FakeGateway {
+        /// Every tools/call the bridge sent, as (name, arguments): the tests
+        /// assert what reached the gateway, not only what came back.
+        seen: std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
+    }
 
     impl ServerHandler for FakeGateway {
         async fn call_tool(
@@ -1484,6 +1488,10 @@ mod tests {
             request: rmcp::model::CallToolRequestParams,
             _context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<CallToolResult, McpError> {
+            self.seen.lock().unwrap().push((
+                request.name.to_string(),
+                serde_json::Value::Object(request.arguments.clone().unwrap_or_default()),
+            ));
             let key_field = match &*request.name {
                 "library_link" => "library",
                 "library_search" => "query",
@@ -1534,12 +1542,16 @@ mod tests {
     // Wire a remote-mode bridge to the fake gateway over an in-process pipe:
     // the client side runs the real initialize handshake and the real
     // `tools/call` request the production bridge sends.
-    async fn bridge_over_fake_gateway() -> StdioBridgeHandler {
+    type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>;
+
+    async fn bridge_over_fake_gateway() -> (StdioBridgeHandler, Seen) {
         use rmcp::ServiceExt;
 
+        let seen: Seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway = FakeGateway { seen: seen.clone() };
         let (client_io, server_io) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
-            let server = FakeGateway
+            let server = gateway
                 .serve(server_io)
                 .await
                 .expect("the fake gateway completes initialize");
@@ -1552,29 +1564,42 @@ mod tests {
         .await
         .expect("initialize finishes well within the budget")
         .expect("the bridge client initializes against the fake gateway");
-        StdioBridgeHandler::new(client, remote_connection())
+        (StdioBridgeHandler::new(client, remote_connection()), seen)
     }
 
-    async fn link_over_bridge(library: &str) -> McpError {
-        let bridge = bridge_over_fake_gateway().await;
-        bridge
+    /// The last tools/call the fake gateway received, as the JSON the bridge
+    /// put on the wire.
+    fn last_request(seen: &Seen) -> serde_json::Value {
+        let seen = seen.lock().unwrap();
+        let (name, arguments) = seen
+            .last()
+            .cloned()
+            .expect("the fake gateway saw one tools/call");
+        serde_json::json!({ "name": name, "arguments": arguments })
+    }
+
+    async fn link_over_bridge(library: &str) -> (McpError, serde_json::Value) {
+        let (bridge, seen) = bridge_over_fake_gateway().await;
+        let err = bridge
             .library_link(Parameters(LibraryLinkInput {
                 library: library.to_string(),
                 action: None,
             }))
             .await
-            .expect_err("the fake gateway answers every link with an error")
+            .expect_err("the fake gateway answers every link with an error");
+        (err, last_request(&seen))
     }
 
-    async fn unlink_over_bridge(library: &str) -> McpError {
-        let bridge = bridge_over_fake_gateway().await;
-        bridge
+    async fn unlink_over_bridge(library: &str) -> (McpError, serde_json::Value) {
+        let (bridge, seen) = bridge_over_fake_gateway().await;
+        let err = bridge
             .library_link(Parameters(LibraryLinkInput {
                 library: library.to_string(),
                 action: Some(LibraryLinkAction::Unlink),
             }))
             .await
-            .expect_err("the fake gateway answers every unlink with an error")
+            .expect_err("the fake gateway answers every unlink with an error");
+        (err, last_request(&seen))
     }
 
     // The description is a copy of the gateway's (tools-registry.ts is the
@@ -1632,7 +1657,11 @@ mod tests {
 
     #[tokio::test]
     async fn library_link_unlink_round_trip_keeps_not_found_intact() {
-        let err = unlink_over_bridge("cloud://t77alice/t77-priv").await;
+        let (err, sent) = unlink_over_bridge("cloud://t77alice/t77-priv").await;
+        assert_eq!(
+            sent,
+            serde_json::json!({ "name": "library_link", "arguments": { "library": "cloud://t77alice/t77-priv", "action": "unlink" } })
+        );
         assert_eq!(err.code.0, -32002);
         assert_eq!(err.message, NOT_FOUND_MESSAGE);
         assert_eq!(err.data, Some(not_found_data()));
@@ -1640,7 +1669,11 @@ mod tests {
 
     #[tokio::test]
     async fn library_link_unlink_round_trip_keeps_invalid_params_intact() {
-        let err = unlink_over_bridge("t77alice/t77-pub").await;
+        let (err, sent) = unlink_over_bridge("t77alice/t77-pub").await;
+        assert_eq!(
+            sent,
+            serde_json::json!({ "name": "library_link", "arguments": { "library": "t77alice/t77-pub", "action": "unlink" } })
+        );
         assert_eq!(err.code.0, -32602);
         assert_eq!(err.message, INVALID_PARAMS_MESSAGE);
         assert_eq!(err.data, Some(invalid_params_data()));
@@ -1648,7 +1681,12 @@ mod tests {
 
     #[tokio::test]
     async fn link_library_round_trip_keeps_slot_exhausted_intact() {
-        let err = link_over_bridge("cloud://t77alice/t77-pub").await;
+        let (err, sent) = link_over_bridge("cloud://t77alice/t77-pub").await;
+        // Default action is omitted on the wire, so the gateway links.
+        assert_eq!(
+            sent,
+            serde_json::json!({ "name": "library_link", "arguments": { "library": "cloud://t77alice/t77-pub" } })
+        );
         assert_eq!(err.code.0, -32000);
         assert_eq!(err.message, SLOT_EXHAUSTED_MESSAGE);
         assert_eq!(err.data, Some(slot_exhausted_data()));
@@ -1656,7 +1694,11 @@ mod tests {
 
     #[tokio::test]
     async fn link_library_round_trip_keeps_invite_required_intact() {
-        let err = link_over_bridge("cloud://t77alice/t77-show").await;
+        let (err, sent) = link_over_bridge("cloud://t77alice/t77-show").await;
+        assert_eq!(
+            sent["arguments"],
+            serde_json::json!({ "library": "cloud://t77alice/t77-show" })
+        );
         assert_eq!(err.code.0, -32000);
         assert_eq!(err.message, INVITE_REQUIRED_MESSAGE);
         assert_eq!(err.data, Some(invite_required_data()));
@@ -1664,7 +1706,11 @@ mod tests {
 
     #[tokio::test]
     async fn link_library_round_trip_keeps_not_found_intact() {
-        let err = link_over_bridge("cloud://t77alice/t77-priv").await;
+        let (err, sent) = link_over_bridge("cloud://t77alice/t77-priv").await;
+        assert_eq!(
+            sent["arguments"],
+            serde_json::json!({ "library": "cloud://t77alice/t77-priv" })
+        );
         assert_eq!(err.code.0, -32002);
         assert_eq!(err.message, NOT_FOUND_MESSAGE);
         assert_eq!(err.data, Some(not_found_data()));
@@ -1672,15 +1718,19 @@ mod tests {
 
     #[tokio::test]
     async fn link_library_round_trip_keeps_invalid_params_intact() {
-        let err = link_over_bridge("t77alice/t77-pub").await;
+        let (err, sent) = link_over_bridge("t77alice/t77-pub").await;
+        assert_eq!(
+            sent["arguments"],
+            serde_json::json!({ "library": "t77alice/t77-pub" })
+        );
         assert_eq!(err.code.0, -32602);
         assert_eq!(err.message, INVALID_PARAMS_MESSAGE);
         assert_eq!(err.data, Some(invalid_params_data()));
     }
 
-    async fn search_over_bridge(query: &str) -> McpError {
-        let bridge = bridge_over_fake_gateway().await;
-        bridge
+    async fn search_over_bridge(query: &str) -> (McpError, serde_json::Value) {
+        let (bridge, seen) = bridge_over_fake_gateway().await;
+        let err = bridge
             .library_search(Parameters(LibrarySearchInput {
                 query: Some(query.to_string()),
                 category: None,
@@ -1690,7 +1740,8 @@ mod tests {
                 output_format: None,
             }))
             .await
-            .expect_err("the fake gateway answers every search with an error")
+            .expect_err("the fake gateway answers every search with an error");
+        (err, last_request(&seen))
     }
 
     // `library_search` shares `bridge_error` with `library_link`, but its
@@ -1698,7 +1749,11 @@ mod tests {
     // into a bare internal error would slip past the link tests above.
     #[tokio::test]
     async fn search_libraries_round_trip_keeps_invalid_params_intact() {
-        let err = search_over_bridge("t77alice/t77-pub").await;
+        let (err, sent) = search_over_bridge("t77alice/t77-pub").await;
+        assert_eq!(
+            sent,
+            serde_json::json!({ "name": "library_search", "arguments": { "query": "t77alice/t77-pub" } })
+        );
         assert_eq!(err.code.0, -32602);
         assert_eq!(err.message, INVALID_PARAMS_MESSAGE);
         assert_eq!(err.data, Some(invalid_params_data()));
@@ -1708,7 +1763,8 @@ mod tests {
     // slot fixture is the richest shape the gateway emits.
     #[tokio::test]
     async fn search_libraries_round_trip_keeps_gateway_code_and_data_intact() {
-        let err = search_over_bridge("cloud://t77alice/t77-pub").await;
+        let (err, sent) = search_over_bridge("cloud://t77alice/t77-pub").await;
+        assert_eq!(sent["name"], "library_search");
         assert_eq!(err.code.0, -32000);
         assert_eq!(err.message, SLOT_EXHAUSTED_MESSAGE);
         assert_eq!(err.data, Some(slot_exhausted_data()));
