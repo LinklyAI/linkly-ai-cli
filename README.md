@@ -205,9 +205,9 @@ Claude Desktop configuration (`claude_desktop_config.json`):
 ```
 
 The bridge advertises the desktop's nine tools. With `--remote` (`"args": ["mcp", "--remote"]`)
-it also advertises the three cloud-only tools the gateway implements — `search_libraries`
-(find cloud libraries in the catalog, including ones not linked yet), `link_library`
-(link one so `search` / `explore` / `list` can use it) and `unlink_library` (release a
+it also advertises the two cloud-only tools the gateway implements — `library_search`
+(find cloud libraries in the catalog, including ones not linked yet) and `library_link`
+(link one so `search` / `explore` / `list` can use it, or with `action: "unlink"` release a
 link the user named, e.g. when the Slot quota is full) — and the server instructions
 describe that reach. Local and LAN bridges never advertise them: the desktop does not
 implement them, so the tool list matches what the upstream can actually serve.
