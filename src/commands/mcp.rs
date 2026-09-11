@@ -21,8 +21,8 @@ use crate::connection;
 /// `--token` is still not accepted: LAN bearer auth is a per-request concern
 /// the bridge does not model, and `--remote` authenticates from the stored
 /// credentials instead.
-pub async fn run(endpoint: Option<&str>, remote: bool) -> Result<()> {
-    let conn = connection::resolve(endpoint, None, remote)?;
+pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> Result<()> {
+    let conn = connection::resolve(endpoint, None, remote, client)?;
 
     // Connect to the desktop app's MCP server. The bridge is a transparent
     // passthrough — skip the version gate so an old Desktop's "tool not

@@ -65,11 +65,11 @@ linkly find-paths --patterns "Notion,notion" --library my-research
 linkly find-paths --patterns "Dropbox" --limit 5
 ```
 
-| Option              | Description                                                                  |
-| ------------------- | ---------------------------------------------------------------------------- |
-| `--patterns <list>` | Comma-separated keywords (OR-matched); ASCII case-insensitive, CJK literal   |
-| `--library <name>`  | Restrict to a specific library by name                                       |
-| `--limit <N>`       | Maximum folder candidates returned (default: 10, max: 50)                    |
+| Option              | Description                                                                |
+| ------------------- | -------------------------------------------------------------------------- |
+| `--patterns <list>` | Comma-separated keywords (OR-matched); ASCII case-insensitive, CJK literal |
+| `--library <name>`  | Restrict to a specific library by name                                     |
+| `--limit <N>`       | Maximum folder candidates returned (default: 10, max: 50)                  |
 
 ### Search Documents
 
@@ -83,15 +83,15 @@ linkly search "quarterly report" --modified-after 2024-01-01 --modified-before 2
 linkly search "weekly notes" --time-sort newest --limit 10
 ```
 
-| Option                       | Description                                                                                                                                                                                                                  |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--limit <N>`                | Maximum results (default: 20, max: 50)                                                                                                                                                                                       |
-| `--type <types>`             | Filter by document types, comma-separated (e.g. `pdf,md,docx,pptx,epub,txt,html`)                                                                                                                                                      |
-| `--library <name>`           | Restrict search to a specific library by name                                                                                                                                                                                |
-| `--path-glob <pat>`          | Glob **substring-matched** against the file path — may appear anywhere, no leading/trailing `*` needed. `*` matches any chars (incl. `/`), `?` one char. Examples: `*.pdf`, `papers`, `/Users/me/notes/` (a full directory path scopes to that dir). When the actual path is unknown, run `linkly find-paths` first. |
-| `--modified-after <iso>`     | Inclusive lower bound on file modification time. Accepts a bare date (`2024-01-01`) or RFC 3339 (`2024-01-01T00:00:00Z`). UTC. Use for explicit windows like "after January 2024".                                           |
-| `--modified-before <iso>`    | Inclusive upper bound. Same format as `--modified-after`.                                                                                                                                                                    |
-| `--time-sort <mode>`         | Reorder by modification time: `newest` or `oldest`. Omit (default) to keep BM25 + vector relevance ordering. Use `newest` for "recent / latest" intent without a fixed window.                                               |
+| Option                    | Description                                                                                                                                                                                                                                                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--limit <N>`             | Maximum results (default: 20, max: 50)                                                                                                                                                                                                                                                                               |
+| `--type <types>`          | Filter by document types, comma-separated (e.g. `pdf,md,docx,pptx,epub,txt,html`)                                                                                                                                                                                                                                    |
+| `--library <name>`        | Restrict search to a specific library by name                                                                                                                                                                                                                                                                        |
+| `--path-glob <pat>`       | Glob **substring-matched** against the file path — may appear anywhere, no leading/trailing `*` needed. `*` matches any chars (incl. `/`), `?` one char. Examples: `*.pdf`, `papers`, `/Users/me/notes/` (a full directory path scopes to that dir). When the actual path is unknown, run `linkly find-paths` first. |
+| `--modified-after <iso>`  | Inclusive lower bound on file modification time. Accepts a bare date (`2024-01-01`) or RFC 3339 (`2024-01-01T00:00:00Z`). UTC. Use for explicit windows like "after January 2024".                                                                                                                                   |
+| `--modified-before <iso>` | Inclusive upper bound. Same format as `--modified-after`.                                                                                                                                                                                                                                                            |
+| `--time-sort <mode>`      | Reorder by modification time: `newest` or `oldest`. Omit (default) to keep BM25 + vector relevance ordering. Use `newest` for "recent / latest" intent without a fixed window.                                                                                                                                       |
 
 ### View Document Outline
 
@@ -142,17 +142,17 @@ linkly list --scope library --library "My Library"
 linkly list --scope notes --tags project --json
 ```
 
-| Option                           | Description                                                              |
-| -------------------------------- | ------------------------------------------------------------------------ |
-| `--scope <s>`                    | Required: `folder`, `library`, or `notes`                                |
-| `--library <ref>`                | Which library to list (`--scope library`; a name or `local://<id>`)      |
-| `--path <dir>`                   | Absolute directory to list (`--scope folder`, or inside a local library) |
-| `--type <list>`                  | Filter by document types, comma-separated (folder/library)               |
-| `--modified-after/-before <t>`   | Modification-time bounds, ISO 8601 UTC (folder/library)                  |
-| `--tags <list>`                  | Filter notes by tags, comma-separated, AND semantics (notes)             |
-| `--sort <s>`                     | `recent` (default), `oldest`, or `name`                                  |
-| `--limit` / `--offset`           | Pagination (default 50, max 200; capped at 50 while snippets are on)     |
-| `--snippet` / `--no-snippet`     | Force per-item snippets on/off (default: notes on, folder/library off)   |
+| Option                         | Description                                                              |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `--scope <s>`                  | Required: `folder`, `library`, or `notes`                                |
+| `--library <ref>`              | Which library to list (`--scope library`; a name or `local://<id>`)      |
+| `--path <dir>`                 | Absolute directory to list (`--scope folder`, or inside a local library) |
+| `--type <list>`                | Filter by document types, comma-separated (folder/library)               |
+| `--modified-after/-before <t>` | Modification-time bounds, ISO 8601 UTC (folder/library)                  |
+| `--tags <list>`                | Filter notes by tags, comma-separated, AND semantics (notes)             |
+| `--sort <s>`                   | `recent` (default), `oldest`, or `name`                                  |
+| `--limit` / `--offset`         | Pagination (default 50, max 200; capped at 50 while snippets are on)     |
+| `--snippet` / `--no-snippet`   | Force per-item snippets on/off (default: notes on, folder/library off)   |
 
 Notes live on the Desktop machine — with `--remote` the listing reaches them through the tunnel; there is no cloud notes store.
 
@@ -166,14 +166,14 @@ echo "Piped body" | linkly note-save --mode create --content -
 linkly note-save --mode edit --note-id <uuid> --base-version <hash> --content "New body #idea"
 ```
 
-| Option                  | Description                                                                    |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| `--mode <m>`            | `create` or `edit` (edit requires `--note-id` and `--base-version` together)   |
-| `--content <text>`      | Markdown body without YAML front matter; `-` reads it from stdin               |
-| `--note-id <uuid>`      | Which note to edit (from `linkly list --scope notes`)                          |
-| `--base-version <hash>` | The version you read (compare-and-swap; from the same `list`)                  |
-| `--tags <list>`         | Note tags (see the caution below before using this on edit)                    |
-| `--app-name <name>`     | Hosting application's display name, shown as the note's source badge           |
+| Option                  | Description                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `--mode <m>`            | `create` or `edit` (edit requires `--note-id` and `--base-version` together) |
+| `--content <text>`      | Markdown body without YAML front matter; `-` reads it from stdin             |
+| `--note-id <uuid>`      | Which note to edit (from `linkly list --scope notes`)                        |
+| `--base-version <hash>` | The version you read (compare-and-swap; from the same `list`)                |
+| `--tags <list>`         | Note tags (see the caution below before using this on edit)                  |
+| `--app-name <name>`     | Hosting application's display name, shown as the note's source badge         |
 
 Edits are compare-and-swap: a stale `--base-version` is rejected — re-read, merge, retry. Tags live in the note body as `#tokens` (the source of truth): `--tags` only **adds** tags, and you remove one by deleting its `#token` from the content. Caution: Desktops older than 0.11.0 instead require `--tags` on edit and treat it as the **full replacement set** (tags you omit are deleted). Requires Desktop >= 0.11.0.
 
@@ -314,7 +314,28 @@ linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_la
 
 ## Options
 
-Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` is available on all commands.
+Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` and `--client` are available on all commands.
+
+### Naming yourself with `--client`
+
+Desktop keeps a local access log of every MCP call so the user can see which AI
+applications read their documents. `--client <name>` is how a call gets a name
+there; without it the entry shows only where the call came from (local, LAN,
+remote).
+
+**If you are an agent driving this CLI, always pass it** — including in the
+`linkly mcp` command line you are configured with:
+
+```bash
+linkly search "budget report" --client claude-code
+linkly mcp --client cursor
+```
+
+It is a label, not a credential: it grants nothing and is never checked against
+anything, which is also why it cannot be made required — a person typing
+commands in a terminal should not have to name themselves. Printable ASCII, up
+to 64 characters; anything else is ignored rather than rejected, so a bad value
+never fails a call.
 
 | Flag               | Scope  | Description                                                                                       |
 | ------------------ | ------ | ------------------------------------------------------------------------------------------------- |
@@ -322,6 +343,7 @@ Connection options (`--endpoint`, `--token`, `--remote`) are available on `searc
 | `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)       |
 | `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth set-key`) |
 | `--json`           | Global | Output in JSON format (useful for scripting)                                                      |
+| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it           |
 | `-V, --version`    | Global | Print version                                                                                     |
 | `-h, --help`       | Global | Print help                                                                                        |
 

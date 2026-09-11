@@ -39,6 +39,52 @@ pub struct ConnectionInfo {
     pub is_remote: bool,
     /// Connection mode for generating contextual error messages
     pub mode: ConnectionMode,
+    /// Sanitized `--client` value, sent as `X-Linkly-Client` on every request.
+    /// `None` when the caller did not name itself, or named itself something
+    /// we cannot put in a header.
+    pub client_name: Option<String>,
+}
+
+/// Header carrying the calling application's name to Desktop's access log.
+///
+/// The same name on all three routes: local and LAN reach Desktop's middleware
+/// directly, and on `--remote` the cloud gateway passes the header through
+/// (API-key auth has no client identity of its own to look up, so the caller's
+/// own claim is all there is — and since the key belongs to the user, a false
+/// name could only mislead the user about their own calls).
+pub const CLIENT_HEADER: &str = "x-linkly-client";
+
+/// Upper bound on the client name, matching Desktop's `sanitize_app_name`.
+const MAX_CLIENT_NAME_CHARS: usize = 64;
+
+/// Names that mean something specific inside Desktop: they are how Desktop
+/// labels its own built-in chatbot and its internal call paths. A third party
+/// claiming one of them would show up in the access log as Linkly itself.
+const RESERVED_CLIENT_NAMES: [&str; 3] = ["linkly-chatbot", "linkly", "external-mcp"];
+
+/// Clean up a `--client` value, or give up on it.
+///
+/// Giving up is deliberately silent: the name is a label for the user's access
+/// log, and refusing to run a search because the label had an emoji in it would
+/// trade a working command for a cosmetic detail. The call still goes through,
+/// it just shows up under its connection source instead.
+///
+/// Non-ASCII is dropped whole rather than filtered down to its ASCII part —
+/// `思源笔记 Pro` reduced to `Pro` would tell the user that an application
+/// called Pro read their files, which is worse than telling them nothing.
+pub fn sanitize_client_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > MAX_CLIENT_NAME_CHARS {
+        return None;
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+        return None;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if RESERVED_CLIENT_NAMES.contains(&lowered.as_str()) {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 impl ConnectionInfo {
@@ -71,11 +117,16 @@ impl ConnectionInfo {
 ///
 /// Note: `endpoint`/`token` and `remote` are mutually exclusive (enforced by clap).
 /// When called from `mcp` command, `token` is always `None` and `remote` is `false`.
+///
+/// `client` is the caller's `--client` value; it rides along on every mode and
+/// never affects which one is chosen.
 pub fn resolve(
     endpoint: Option<&str>,
     token: Option<&str>,
     remote: bool,
+    client: Option<&str>,
 ) -> Result<ConnectionInfo> {
+    let client_name = client.and_then(sanitize_client_name);
     // Mode 1: explicit endpoint + token for LAN auth
     if let Some(ep) = endpoint {
         let trimmed = ep.trim_end_matches('/');
@@ -91,6 +142,7 @@ pub fn resolve(
             auth_header,
             is_remote: false,
             mode,
+            client_name,
         });
     }
 
@@ -110,6 +162,7 @@ pub fn resolve(
             auth_header: Some(format!("Bearer {}", api_key)),
             is_remote: true,
             mode: ConnectionMode::Remote,
+            client_name,
         });
     }
 
@@ -155,6 +208,7 @@ pub fn resolve(
         auth_header: None,
         is_remote: false,
         mode: ConnectionMode::Local,
+        client_name,
     })
 }
 
@@ -432,7 +486,7 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_mode() {
-        let info = resolve(Some("http://192.168.1.100:60606/mcp"), None, false).unwrap();
+        let info = resolve(Some("http://192.168.1.100:60606/mcp"), None, false, None).unwrap();
         assert_eq!(info.mcp_url, "http://192.168.1.100:60606/mcp");
         assert_eq!(info.base_url, "http://192.168.1.100:60606");
         assert!(info.auth_header.is_none());
@@ -440,14 +494,14 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_with_token() {
-        let info = resolve(Some("http://x:60606/mcp"), Some("tk"), false).unwrap();
+        let info = resolve(Some("http://x:60606/mcp"), Some("tk"), false, None).unwrap();
         assert_eq!(info.mcp_url, "http://x:60606/mcp");
         assert_eq!(info.auth_header, Some("Bearer tk".to_string()));
     }
 
     #[test]
     fn resolve_endpoint_trailing_slash_cleaned() {
-        let info = resolve(Some("http://x:60606/"), None, false).unwrap();
+        let info = resolve(Some("http://x:60606/"), None, false, None).unwrap();
         assert_eq!(info.base_url, "http://x:60606");
         assert_eq!(info.mcp_url, "http://x:60606/mcp");
     }
@@ -457,7 +511,7 @@ mod tests {
     #[test]
     fn resolve_remote_no_credentials_fails() {
         with_temp_home("remote_no_cred", |_home| {
-            let result = resolve(None, None, true);
+            let result = resolve(None, None, true, None);
             assert!(result.is_err());
         });
     }
@@ -471,7 +525,7 @@ mod tests {
             std::fs::create_dir_all(&linkly_dir).unwrap();
             std::fs::write(linkly_dir.join("port"), r#"{"port": 60606}"#).unwrap();
 
-            let info = resolve(None, None, false).unwrap();
+            let info = resolve(None, None, false, None).unwrap();
             assert_eq!(info.mcp_url, "http://127.0.0.1:60606/mcp");
             assert_eq!(info.base_url, "http://127.0.0.1:60606");
             assert!(info.auth_header.is_none());
@@ -481,7 +535,7 @@ mod tests {
     #[test]
     fn resolve_default_no_port_file_fails() {
         with_temp_home("default_no_port", |_home| {
-            let result = resolve(None, None, false);
+            let result = resolve(None, None, false, None);
             assert!(result.is_err());
         });
     }
@@ -609,5 +663,99 @@ mod tests {
             "tk",
         ]);
         assert!(result.is_ok(), "--endpoint + --token should be accepted");
+    }
+
+    #[test]
+    fn client_name_keeps_the_names_agents_actually_pass() {
+        for name in [
+            "claude-code",
+            "Cursor",
+            "Cherry Studio",
+            "codex-cli",
+            "n8n",
+            "ChatGPT",
+        ] {
+            assert_eq!(
+                sanitize_client_name(name).as_deref(),
+                Some(name),
+                "{name} should survive"
+            );
+        }
+    }
+
+    #[test]
+    fn client_name_trims_surrounding_space() {
+        assert_eq!(
+            sanitize_client_name("  Cursor  ").as_deref(),
+            Some("Cursor")
+        );
+    }
+
+    #[test]
+    fn client_name_drops_non_ascii_whole() {
+        // Not filtered down to its ASCII part: "Pro" would name an application
+        // that does not exist, which reads as fact in the user's access log.
+        assert_eq!(sanitize_client_name("思源笔记 Pro"), None);
+        assert_eq!(sanitize_client_name("Café"), None);
+        assert_eq!(sanitize_client_name("Claude \u{1F916}"), None);
+    }
+
+    #[test]
+    fn client_name_drops_control_characters() {
+        assert_eq!(sanitize_client_name("Cur\nsor"), None);
+        assert_eq!(sanitize_client_name("Cur\tsor"), None);
+    }
+
+    #[test]
+    fn client_name_drops_reserved_names() {
+        for name in ["linkly", "Linkly", "linkly-chatbot", "external-mcp"] {
+            assert_eq!(sanitize_client_name(name), None, "{name} is reserved");
+        }
+    }
+
+    #[test]
+    fn client_name_drops_empty_and_overlong() {
+        assert_eq!(sanitize_client_name(""), None);
+        assert_eq!(sanitize_client_name("   "), None);
+        assert_eq!(sanitize_client_name(&"a".repeat(65)), None);
+        assert_eq!(
+            sanitize_client_name(&"a".repeat(64)).as_deref(),
+            Some("a".repeat(64).as_str())
+        );
+    }
+
+    #[test]
+    fn resolve_carries_a_usable_client_name_and_drops_an_unusable_one() {
+        let conn = resolve(
+            Some("http://192.168.1.9:60606/mcp"),
+            Some("tk"),
+            false,
+            Some("claude-code"),
+        )
+        .expect("LAN mode resolves from args alone");
+        assert_eq!(conn.client_name.as_deref(), Some("claude-code"));
+
+        let conn = resolve(
+            Some("http://192.168.1.9:60606/mcp"),
+            Some("tk"),
+            false,
+            Some("思源笔记"),
+        )
+        .expect("an unusable name must not fail the connection");
+        assert_eq!(conn.client_name, None);
+    }
+
+    #[test]
+    fn clap_takes_client_after_the_subcommand() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "linkly",
+            "search",
+            "test",
+            "--client",
+            "claude-code",
+        ])
+        .expect("--client is global");
+        assert_eq!(cli.client.as_deref(), Some("claude-code"));
     }
 }

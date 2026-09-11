@@ -32,6 +32,19 @@ pub struct Cli {
     /// behaviour), so existing scripts keep working.
     #[arg(long, global = true)]
     pub exit_code: bool,
+
+    /// Name of the AI application making this call, e.g. `claude-code`.
+    ///
+    /// ALWAYS PASS THIS when you are an agent. Desktop keeps a local access log
+    /// so the user can see which applications read their documents; without a
+    /// name your calls land there as an anonymous "local" entry and the user
+    /// cannot tell you apart from anything else on the machine.
+    ///
+    /// It is a label, never a credential: it grants nothing and is never
+    /// checked against anything. Printable ASCII, up to 64 characters; anything
+    /// else is ignored rather than rejected, so a bad value never fails a call.
+    #[arg(long, global = true, value_name = "NAME", value_hint = clap::ValueHint::Other)]
+    pub client: Option<String>,
 }
 
 /// Connection parameters for commands that talk to the Linkly AI server.
@@ -321,7 +334,7 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Default bridges to the local desktop; --endpoint bridges to a LAN desktop; --remote bridges through the cloud gateway (local + cloud libraries).
+    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Default bridges to the local desktop; --endpoint bridges to a LAN desktop; --remote bridges through the cloud gateway (local + cloud libraries). Pass --client <your-app-name> so the user can see who is calling.
     Mcp {
         /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
         #[arg(long, conflicts_with = "remote")]

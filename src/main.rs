@@ -134,12 +134,23 @@ fn found(_: ()) -> Outcome {
     Outcome::Found
 }
 
-fn resolve_conn(conn: &ConnectionArgs) -> anyhow::Result<connection::ConnectionInfo> {
-    connection::resolve(conn.endpoint.as_deref(), conn.token.as_deref(), conn.remote)
+fn resolve_conn(
+    conn: &ConnectionArgs,
+    client: Option<&str>,
+) -> anyhow::Result<connection::ConnectionInfo> {
+    connection::resolve(
+        conn.endpoint.as_deref(),
+        conn.token.as_deref(),
+        conn.remote,
+        client,
+    )
 }
 
 async fn run(cli: Cli) -> anyhow::Result<Outcome> {
     let json_mode = cli.json;
+    // Who is calling. Global, so every command that opens a connection carries
+    // it without each arm having to know about it.
+    let client = cli.client.as_deref();
 
     match cli.command {
         Command::Auth { action } => match action {
@@ -149,10 +160,10 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         }
         .map(found),
         Command::Status { conn } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             commands::status::run(&conn, json_mode).await.map(found)
         }
-        Command::Doctor { conn } => commands::doctor::run_from_args(&conn, json_mode)
+        Command::Doctor { conn } => commands::doctor::run_from_args(&conn, client, json_mode)
             .await
             .map(found),
         Command::Completions { shell } => commands::completions::run(shell).map(found),
@@ -163,18 +174,20 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             cli::SkillsAction::Update => commands::skills::update().await,
         }
         .map(found),
-        Command::Mcp { endpoint, remote } => commands::mcp::run(endpoint.as_deref(), remote)
-            .await
-            .map(found),
+        Command::Mcp { endpoint, remote } => {
+            commands::mcp::run(endpoint.as_deref(), remote, client)
+                .await
+                .map(found)
+        }
         Command::ListLibraries { conn } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::list_libraries::run(&client, &conn, json_mode)
                 .await
                 .map(found)
         }
         Command::Explore { library, conn } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::explore::run(&client, &conn, library, json_mode)
                 .await
@@ -186,7 +199,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             limit,
             conn,
         } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::find_paths::run(&client, &conn, patterns, library, limit, json_mode).await
         }
@@ -203,7 +216,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             tags,
             conn,
         } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::search::run(
                 &client,
@@ -236,7 +249,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             conn,
         } => {
             let doc_ids = doc_ids::resolve(&doc_ids)?;
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::grep::run(
                 &client,
@@ -257,7 +270,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         }
         Command::Outline { ids, expand, conn } => {
             let ids = doc_ids::resolve(&ids)?;
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::outline::run(&client, &conn, &ids, expand, json_mode)
                 .await
@@ -271,7 +284,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             conn,
         } => {
             let ids = doc_ids::resolve(&ids)?;
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::read::run(&client, &conn, &ids, offset, limit, image_text, json_mode)
                 .await
@@ -292,7 +305,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             no_snippet,
             conn,
         } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::list::run(
                 &client,
@@ -324,7 +337,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             app_name,
             conn,
         } => {
-            let conn = resolve_conn(&conn)?;
+            let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
             commands::note_save::run(
                 &client,

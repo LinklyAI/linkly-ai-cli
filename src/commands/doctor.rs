@@ -26,7 +26,11 @@ struct LocalHealthResponse {
 }
 
 /// Entry point from main — handles connection resolution failures gracefully.
-pub async fn run_from_args(args: &ConnectionArgs, json_mode: bool) -> Result<()> {
+pub async fn run_from_args(
+    args: &ConnectionArgs,
+    client: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
     // Determine mode from args (before resolve, which may fail)
     let mode = if args.remote {
         ConnectionMode::Remote
@@ -38,7 +42,12 @@ pub async fn run_from_args(args: &ConnectionArgs, json_mode: bool) -> Result<()>
         ConnectionMode::Local
     };
 
-    match connection::resolve(args.endpoint.as_deref(), args.token.as_deref(), args.remote) {
+    match connection::resolve(
+        args.endpoint.as_deref(),
+        args.token.as_deref(),
+        args.remote,
+        client,
+    ) {
         Ok(conn) => run(&conn, json_mode).await,
         Err(e) => {
             // resolve() failed — report it as the first check failure, then stop
@@ -68,6 +77,7 @@ pub async fn run_from_args(args: &ConnectionArgs, json_mode: bool) -> Result<()>
                 auth_header: None,
                 is_remote: args.remote,
                 mode,
+                client_name: None,
             };
 
             if json_mode {

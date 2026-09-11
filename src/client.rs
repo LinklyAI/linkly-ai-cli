@@ -1,7 +1,10 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::connection::{ConnectionInfo, ConnectionMode};
+use reqwest::header::{HeaderName, HeaderValue};
+
+use crate::connection::{ConnectionInfo, ConnectionMode, CLIENT_HEADER};
 use crate::version_check::check_desktop_version;
 use anyhow::{bail, Result};
 use rmcp::model::{CallToolRequestParams, ClientInfo, Content, Implementation, RawContent};
@@ -42,6 +45,23 @@ impl From<rmcp::model::ErrorData> for ToolError {
             data: error.data,
         }
     }
+}
+
+/// Headers added to every MCP request. Today that is only the caller's name.
+///
+/// An unusable name yields no header rather than an error: the name is a label
+/// for the user's access log, and a bad label must not cost them the command.
+/// `sanitize_client_name` already keeps the value inside printable ASCII, so
+/// `from_str` failing here means something upstream changed — drop it quietly
+/// and carry on.
+fn client_headers(client_name: Option<&str>) -> HashMap<HeaderName, HeaderValue> {
+    let mut headers = HashMap::new();
+    if let Some(name) = client_name {
+        if let Ok(value) = HeaderValue::from_str(name) {
+            headers.insert(HeaderName::from_static(CLIENT_HEADER), value);
+        }
+    }
+    headers
 }
 
 /// Timeout for MCP session initialization (serve / initialize handshake).
@@ -100,6 +120,7 @@ impl McpClient {
             let token = header.strip_prefix("Bearer ").unwrap_or(header);
             config = config.auth_header(token);
         }
+        config = config.custom_headers(client_headers(conn.client_name.as_deref()));
 
         let transport = StreamableHttpClientTransport::from_config(config);
 
@@ -357,8 +378,33 @@ fn extract_text(content: &[Content]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ToolError;
+    use super::{client_headers, ToolError};
+    use crate::connection::CLIENT_HEADER;
+    use reqwest::header::HeaderName;
     use rmcp::model::{ErrorCode, ErrorData};
+
+    #[test]
+    fn a_named_caller_gets_the_header() {
+        let headers = client_headers(Some("claude-code"));
+        assert_eq!(
+            headers
+                .get(&HeaderName::from_static(CLIENT_HEADER))
+                .map(|v| v.to_str().unwrap()),
+            Some("claude-code")
+        );
+    }
+
+    #[test]
+    fn an_unnamed_caller_sends_no_header() {
+        assert!(client_headers(None).is_empty());
+    }
+
+    #[test]
+    fn a_value_that_cannot_be_a_header_is_dropped_rather_than_fatal() {
+        // sanitize_client_name should have caught this already; if something
+        // slips through, the call still has to go out.
+        assert!(client_headers(Some("bad\nvalue")).is_empty());
+    }
 
     #[test]
     fn tool_error_from_mcp_maps_all_fields() {

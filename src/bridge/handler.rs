@@ -1536,6 +1536,7 @@ mod tests {
             auth_header: Some("Bearer lkai_test".to_string()),
             is_remote: true,
             mode: crate::connection::ConnectionMode::Remote,
+            client_name: None,
         }
     }
 
