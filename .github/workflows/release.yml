@@ -106,6 +106,26 @@ jobs:
             "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" "$R2_ENDPOINT" \
             > ~/.config/rclone/rclone.conf
 
+      # One checksum file for everything below: SHA256SUMS next to the archives,
+      # the `sha256` map in latest.json, and the Homebrew formula.
+      - name: Compute checksums
+        id: sums
+        run: |
+          : > SHA256SUMS
+          for dir in artifacts/linkly-*/; do
+            file=$(ls "$dir"linkly-*.*)
+            (cd "$(dirname "$file")" && sha256sum "$(basename "$file")") >> SHA256SUMS
+          done
+          cat SHA256SUMS
+          sum_of() { grep " $1\$" SHA256SUMS | cut -d' ' -f1; }
+          {
+            echo "darwin_arm=$(sum_of linkly-aarch64-apple-darwin.tar.gz)"
+            echo "darwin_x64=$(sum_of linkly-x86_64-apple-darwin.tar.gz)"
+            echo "linux_x64=$(sum_of linkly-x86_64-unknown-linux-gnu.tar.gz)"
+            echo "linux_arm=$(sum_of linkly-aarch64-unknown-linux-gnu.tar.gz)"
+            echo "win_x64=$(sum_of linkly-x86_64-pc-windows-msvc.zip)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Upload to R2
         run: |
           VERSION=${{ steps.version.outputs.version }}
@@ -116,7 +136,11 @@ jobs:
             rclone copyto "$file" "r2:linkly-updater/cli/v${VERSION}/${filename}"
             rclone copyto "$file" "r2:linkly-updater/cli/latest/${filename}"
           done
+          rclone copyto SHA256SUMS "r2:linkly-updater/cli/v${VERSION}/SHA256SUMS"
+          rclone copyto SHA256SUMS "r2:linkly-updater/cli/latest/SHA256SUMS"
 
+      # `assets` keeps its url-string shape: shipped desktops, `linkly self-update`
+      # and install.sh all parse it that way. Checksums ride in a sibling map.
       - name: Generate and upload latest.json
         run: |
           VERSION=${{ steps.version.outputs.version }}
@@ -129,6 +153,11 @@ jobs:
             --arg linux_x64 "${BASE}/linkly-x86_64-unknown-linux-gnu.tar.gz" \
             --arg linux_arm "${BASE}/linkly-aarch64-unknown-linux-gnu.tar.gz" \
             --arg win_x64 "${BASE}/linkly-x86_64-pc-windows-msvc.zip" \
+            --arg sha_darwin_arm "${{ steps.sums.outputs.darwin_arm }}" \
+            --arg sha_darwin_x64 "${{ steps.sums.outputs.darwin_x64 }}" \
+            --arg sha_linux_x64 "${{ steps.sums.outputs.linux_x64 }}" \
+            --arg sha_linux_arm "${{ steps.sums.outputs.linux_arm }}" \
+            --arg sha_win_x64 "${{ steps.sums.outputs.win_x64 }}" \
             '{
               version: $v,
               assets: {
@@ -137,6 +166,13 @@ jobs:
                 "linux-x86_64": $linux_x64,
                 "linux-aarch64": $linux_arm,
                 "windows-x86_64": $win_x64
+              },
+              sha256: {
+                "darwin-aarch64": $sha_darwin_arm,
+                "darwin-x86_64": $sha_darwin_x64,
+                "linux-x86_64": $sha_linux_x64,
+                "linux-aarch64": $sha_linux_arm,
+                "windows-x86_64": $sha_win_x64
               }
             }' > latest.json
 
@@ -150,7 +186,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/linkly-*/*
+          files: |
+            artifacts/linkly-*/*
+            SHA256SUMS
           generate_release_notes: true
 
       - name: Install Rust toolchain
@@ -168,11 +206,11 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
           BASE="https://updater.linkly.ai/cli/v${VERSION}"
 
-          # Calculate SHA256 for each platform
-          SHA_DARWIN_ARM=$(sha256sum artifacts/linkly-aarch64-apple-darwin/linkly-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
-          SHA_DARWIN_X64=$(sha256sum artifacts/linkly-x86_64-apple-darwin/linkly-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
-          SHA_LINUX_X64=$(sha256sum artifacts/linkly-x86_64-unknown-linux-gnu/linkly-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
-          SHA_LINUX_ARM=$(sha256sum artifacts/linkly-aarch64-unknown-linux-gnu/linkly-aarch64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)
+          # Same checksums as SHA256SUMS / latest.json.
+          SHA_DARWIN_ARM="${{ steps.sums.outputs.darwin_arm }}"
+          SHA_DARWIN_X64="${{ steps.sums.outputs.darwin_x64 }}"
+          SHA_LINUX_X64="${{ steps.sums.outputs.linux_x64 }}"
+          SHA_LINUX_ARM="${{ steps.sums.outputs.linux_arm }}"
 
           # Generate formula
           cat > linkly.rb << FORMULA

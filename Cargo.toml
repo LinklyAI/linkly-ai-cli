@@ -15,6 +15,11 @@ exclude = ["artifacts/", "scripts/", ".github/", "latest.json"]
 name = "linkly"
 path = "src/main.rs"
 
+[profile.release]
+# Strip symbols from release binaries: the download shrinks from ~13 MB to
+# roughly a third, and users never debug this binary with symbols anyway.
+strip = true
+
 [dependencies]
 anyhow = "1.0.102"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
