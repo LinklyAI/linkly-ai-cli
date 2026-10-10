@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use crate::cli::{ConnectionArgs, COMMUNITY_URL};
 use crate::client::McpClient;
+use crate::commands::auth::{mask_key, mask_lan_token, remote_key_origin};
 use crate::connection::{self, ConnectionInfo, ConnectionMode, RemoteHealthResponse};
 
 /// Individual check result.
@@ -25,106 +26,192 @@ struct LocalHealthResponse {
     index_status: String,
 }
 
-/// Entry point from main — handles connection resolution failures gracefully.
+/// Entry point from main.
+///
+/// With a connection flag (`--remote`, `--lan`, `--endpoint`) only that
+/// connection is diagnosed, exactly as before. Without one, every connection
+/// this machine can use is diagnosed at once and reported in groups: the
+/// local Desktop always, the remote gateway and the LAN Desktop when
+/// credentials for them are saved. The run succeeds when at least one group
+/// is usable — an agent on a server with no Desktop but a working remote
+/// connection is healthy, not broken.
 pub async fn run_from_args(
     args: &ConnectionArgs,
     client: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    // Determine mode from args (before resolve, which may fail)
-    let mode = if args.remote {
+    if args.remote || args.lan || args.endpoint.is_some() {
+        let (mode, checks) = diagnose(
+            args.endpoint.as_deref(),
+            args.token.as_deref(),
+            args.lan,
+            args.remote,
+            client,
+        )
+        .await;
+        if json_mode {
+            println!("{}", checks_json(&checks, &mode));
+        } else {
+            print_human(&checks);
+        }
+        if hard_failures(&checks) > 0 {
+            // Empty message: the printed checks already explained.
+            anyhow::bail!("");
+        }
+        return Ok(());
+    }
+    run_all(client, json_mode).await
+}
+
+/// Resolve one connection and run its checks. A resolution failure (no port
+/// file, no saved credentials) becomes a single failed "Connection" check.
+async fn diagnose(
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    lan: bool,
+    remote: bool,
+    client: Option<&str>,
+) -> (ConnectionMode, Vec<Check>) {
+    let mode = if remote {
         ConnectionMode::Remote
-    } else if args.endpoint.is_some() || args.lan {
+    } else if endpoint.is_some() || lan {
         ConnectionMode::Lan {
-            endpoint: args.endpoint.clone().unwrap_or_default(),
-            saved: args.lan,
+            endpoint: endpoint.unwrap_or_default().to_string(),
+            saved: lan,
         }
     } else {
         ConnectionMode::Local
     };
 
-    match connection::resolve(
-        args.endpoint.as_deref(),
-        args.token.as_deref(),
-        args.lan,
-        args.remote,
-        client,
-    ) {
-        Ok(conn) => run(&conn, json_mode).await,
+    match connection::resolve(endpoint, token, lan, remote, client) {
+        Ok(conn) => {
+            let checks = match &conn.mode {
+                ConnectionMode::Local => run_local(&conn).await,
+                ConnectionMode::Lan { .. } => run_lan(&conn).await,
+                ConnectionMode::Remote => run_remote(&conn).await,
+            };
+            (conn.mode, checks)
+        }
         Err(e) => {
-            // resolve() failed — report it as the first check failure, then stop
+            let advice = match &mode {
+                ConnectionMode::Local => {
+                    "Launch Linkly AI Desktop on this machine, or use --remote / --lan."
+                }
+                ConnectionMode::Remote => {
+                    "Run 'linkly auth login' to sign in.\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
+                }
+                ConnectionMode::Lan { saved: true, .. } => {
+                    "Run 'linkly auth set-key <token> --lan --endpoint <url>' to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
+                }
+                ConnectionMode::Lan { .. } => "Check --endpoint and --token values.",
+            };
+            // The error's first line states the problem; its how-to-connect
+            // paragraph would repeat what the advice and the other groups say.
+            let message = e.to_string();
             let checks = vec![Check {
                 name: "Connection",
                 ok: false,
-                detail: format!("{}", e),
+                detail: message.lines().next().unwrap_or_default().to_string(),
                 latency_ms: None,
-                advice: match &mode {
-                    ConnectionMode::Local => Some(
-                        "Launch Linkly AI Desktop on this machine, or use --remote / --lan."
-                            .to_string(),
-                    ),
-                    ConnectionMode::Remote => Some(
-                        "Run 'linkly auth login' to sign in.\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
-                            .to_string(),
-                    ),
-                    ConnectionMode::Lan { saved: true, .. } => Some(
-                        "Run 'linkly auth set-key <token> --lan --endpoint <url>' to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
-                            .to_string(),
-                    ),
-                    ConnectionMode::Lan { .. } => Some(
-                        "Check --endpoint and --token values.".to_string(),
-                    ),
-                },
+                advice: Some(advice.to_string()),
             }];
-
-            let dummy_conn = ConnectionInfo {
-                mcp_url: String::new(),
-                base_url: String::new(),
-                auth_header: None,
-                is_remote: args.remote,
-                mode,
-                client_name: None,
-            };
-
-            if json_mode {
-                print_json(&checks, &dummy_conn);
-            } else {
-                print_human(&checks);
-            }
-            // Connection resolution failed — main.rs should exit non-zero.
-            // Empty message because the printed checks already explained.
-            anyhow::bail!("")
+            (mode, checks)
         }
     }
 }
 
-pub async fn run(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
-    let checks = match &conn.mode {
-        ConnectionMode::Local => run_local(conn).await,
-        ConnectionMode::Lan { .. } => run_lan(conn).await,
-        ConnectionMode::Remote => run_remote(conn).await,
-    };
-
-    if json_mode {
-        print_json(&checks, conn);
-    } else {
-        print_human(&checks);
-    }
-
-    // Reflect failures in the process exit code. The "Version" check is
-    // informational — it reports an outdated Desktop without blocking
-    // the rest of the diagnostics — so we only fail when one of the
-    // hard checks (connectivity, MCP handshake, etc.) is not ok.
-    let hard_failures = checks
+/// Failed checks that make a connection unusable. "Version" is informational:
+/// an outdated Desktop is worth knowing but doesn't block anything.
+fn hard_failures(checks: &[Check]) -> usize {
+    checks
         .iter()
         .filter(|c| !c.ok && c.name != "Version")
-        .count();
-    if hard_failures > 0 {
-        // Empty message: human/JSON output already printed the per-check
-        // detail. main.rs suppresses re-printing for empty errors.
-        anyhow::bail!("");
+        .count()
+}
+
+/// One connection in the all-connections report.
+struct Group {
+    /// "local" / "remote" / "lan" — the JSON `mode`.
+    mode: &'static str,
+    /// Human heading, naming the flag that selects this connection.
+    title: &'static str,
+    /// `None` when there are no credentials for it: shown, not diagnosed.
+    checks: Option<Vec<Check>>,
+    /// What to run to set it up, for the not-configured case.
+    setup_hint: &'static str,
+}
+
+impl Group {
+    fn status(&self) -> &'static str {
+        match &self.checks {
+            None => "not_configured",
+            Some(checks) if hard_failures(checks) > 0 => "error",
+            Some(checks) if checks.iter().any(|c| !c.ok) => "warning",
+            Some(_) => "ok",
+        }
     }
 
+    fn usable(&self) -> bool {
+        matches!(self.status(), "ok" | "warning")
+    }
+}
+
+async fn run_all(client: Option<&str>, json_mode: bool) -> Result<()> {
+    // A corrupted credentials file counts as "configured": diagnosing it
+    // surfaces the error instead of hiding it behind "not configured".
+    let remote_saved = !matches!(connection::read_credentials_api_key(), Ok(None));
+    let lan_saved = !matches!(connection::read_lan_credentials(), Ok(None));
+
+    // Run concurrently: the slowest connection sets the total time.
+    let (local, remote, lan) = tokio::join!(
+        diagnose(None, None, false, false, client),
+        async {
+            if remote_saved {
+                Some(diagnose(None, None, false, true, client).await.1)
+            } else {
+                None
+            }
+        },
+        async {
+            if lan_saved {
+                Some(diagnose(None, None, true, false, client).await.1)
+            } else {
+                None
+            }
+        },
+    );
+
+    let groups = [
+        Group {
+            mode: "local",
+            title: "Local (this machine)",
+            checks: Some(local.1),
+            setup_hint: "",
+        },
+        Group {
+            mode: "remote",
+            title: "Remote (--remote)",
+            checks: remote,
+            setup_hint: "Not configured. Run `linkly auth login` to enable --remote.",
+        },
+        Group {
+            mode: "lan",
+            title: "LAN (--lan)",
+            checks: lan,
+            setup_hint:
+                "Not configured. Run `linkly auth set-key <token> --lan --endpoint <url>` to enable --lan.",
+        },
+    ];
+
+    if json_mode {
+        print_groups_json(&groups);
+    } else {
+        print_groups_human(&groups);
+    }
+
+    if !groups.iter().any(Group::usable) {
+        anyhow::bail!("");
+    }
     Ok(())
 }
 
@@ -164,6 +251,31 @@ async fn run_local(conn: &ConnectionInfo) -> Vec<Check> {
 async fn run_lan(conn: &ConnectionInfo) -> Vec<Check> {
     let mut checks = Vec::new();
 
+    // 0. Credentials — which address and token are in play.
+    let token_preview = conn
+        .auth_header
+        .as_ref()
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(mask_lan_token)
+        .unwrap_or_default();
+    let detail = match &conn.mode {
+        ConnectionMode::Lan { saved: true, .. } => format!(
+            "LAN connection saved ({}, token {})",
+            conn.base_url, token_preview
+        ),
+        _ => format!(
+            "Using --endpoint and --token ({}, token {})",
+            conn.base_url, token_preview
+        ),
+    };
+    checks.push(Check {
+        name: "Credentials",
+        ok: true,
+        detail,
+        latency_ms: None,
+        advice: None,
+    });
+
     // 1. HTTP connectivity + 2. Auth + 3. App status
     run_health_check(&mut checks, conn, false).await;
 
@@ -181,23 +293,21 @@ async fn run_lan(conn: &ConnectionInfo) -> Vec<Check> {
 async fn run_remote(conn: &ConnectionInfo) -> Vec<Check> {
     let mut checks = Vec::new();
 
-    // 1. Credentials
+    // 1. Credentials — same masking and wording as `linkly auth status`.
     let key_preview = conn
         .auth_header
         .as_ref()
         .and_then(|h| h.strip_prefix("Bearer "))
-        .map(|k| {
-            if k.len() > 10 {
-                format!("{}...{}", &k[..6], &k[k.len() - 4..])
-            } else {
-                k.to_string()
-            }
-        })
+        .map(mask_key)
         .unwrap_or_default();
     checks.push(Check {
         name: "Credentials",
         ok: true,
-        detail: format!("API key configured ({})", key_preview),
+        detail: format!(
+            "API key configured ({}, {})",
+            key_preview,
+            remote_key_origin()
+        ),
         latency_ms: None,
         advice: None,
     });
@@ -526,37 +636,7 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
 fn print_human(checks: &[Check]) {
     println!("{}", "Linkly AI Doctor".bold());
     println!();
-
-    let max_name_len = checks.iter().map(|c| c.name.len()).max().unwrap_or(0);
-
-    for check in checks {
-        let label = if check.ok {
-            "[ok]".green().to_string()
-        } else {
-            "[FAIL]".red().to_string()
-        };
-        println!(
-            "  {:width$}  {} {}",
-            format!("{}:", check.name).dimmed(),
-            label,
-            check.detail,
-            width = max_name_len + 1
-        );
-    }
-
-    // Collect advice from failed checks
-    let advices: Vec<&str> = checks
-        .iter()
-        .filter(|c| !c.ok && c.advice.is_some())
-        .map(|c| c.advice.as_deref().unwrap())
-        .collect();
-
-    if !advices.is_empty() {
-        println!();
-        for advice in &advices {
-            println!("  {}", advice);
-        }
-    }
+    print_checks(checks);
 
     let issues = checks.iter().filter(|c| !c.ok).count();
     println!();
@@ -576,13 +656,115 @@ fn print_human(checks: &[Check]) {
     }
 }
 
-fn print_json(checks: &[Check], conn: &ConnectionInfo) {
-    let mode = match &conn.mode {
+/// The check lines of one connection, followed by advice for failed ones.
+fn print_checks(checks: &[Check]) {
+    let max_name_len = checks.iter().map(|c| c.name.len()).max().unwrap_or(0);
+
+    for check in checks {
+        let label = if check.ok {
+            "[ok]".green().to_string()
+        } else {
+            "[FAIL]".red().to_string()
+        };
+        println!(
+            "  {:width$}  {} {}",
+            format!("{}:", check.name).dimmed(),
+            label,
+            check.detail,
+            width = max_name_len + 1
+        );
+    }
+
+    let advices: Vec<&str> = checks
+        .iter()
+        .filter(|c| !c.ok)
+        .filter_map(|c| c.advice.as_deref())
+        .collect();
+    if !advices.is_empty() {
+        println!();
+        for advice in &advices {
+            println!("  {}", advice);
+        }
+    }
+}
+
+fn print_groups_human(groups: &[Group]) {
+    println!("{}", "Linkly AI Doctor".bold());
+    for group in groups {
+        println!();
+        println!("{}", group.title.bold());
+        match &group.checks {
+            Some(checks) => print_checks(checks),
+            None => println!("  {}", group.setup_hint.dimmed()),
+        }
+    }
+
+    println!();
+    let summary: Vec<String> = groups
+        .iter()
+        .map(|g| {
+            let state = match g.status() {
+                "ok" => "ok".green().to_string(),
+                "warning" => "ok, with warnings".yellow().to_string(),
+                "error" => "failed".red().to_string(),
+                _ => "not configured".dimmed().to_string(),
+            };
+            let name = if g.mode == "lan" { "LAN" } else { g.mode };
+            format!("{} {}", name, state)
+        })
+        .collect();
+    println!("{} {}", "Summary:".bold(), summary.join(", "));
+    if groups.iter().any(|g| g.status() == "error") {
+        println!("Still stuck? Ask the community: {}", COMMUNITY_URL);
+    }
+}
+
+fn print_groups_json(groups: &[Group]) {
+    let usable = groups.iter().filter(|g| g.usable()).count();
+    let clean = groups
+        .iter()
+        .filter(|g| g.checks.is_some())
+        .all(|g| g.status() == "ok");
+    let status = if usable == 0 {
+        "error"
+    } else if clean {
+        "ok"
+    } else {
+        "warning"
+    };
+    let groups_json: Vec<serde_json::Value> = groups
+        .iter()
+        .map(|g| match &g.checks {
+            Some(checks) => {
+                let mut obj = checks_json_for(checks, g.mode);
+                obj["configured"] = serde_json::json!(true);
+                obj
+            }
+            None => serde_json::json!({
+                "mode": g.mode,
+                "configured": false,
+                "status": "not_configured",
+                "hint": g.setup_hint,
+            }),
+        })
+        .collect();
+    println!(
+        "{}",
+        serde_json::json!({ "status": status, "groups": groups_json })
+    );
+}
+
+/// The single-connection JSON envelope (`doctor --remote --json` etc.).
+fn checks_json(checks: &[Check], mode: &ConnectionMode) -> serde_json::Value {
+    let mode = match mode {
         ConnectionMode::Local => "local",
         ConnectionMode::Lan { .. } => "lan",
         ConnectionMode::Remote => "remote",
     };
+    checks_json_for(checks, mode)
+}
 
+fn checks_json_for(checks: &[Check], mode: &str) -> serde_json::Value {
     // Split failed checks into hard failures and warnings. The "Version"
     // check is informational only — an outdated Desktop is a real concern
     // but doesn't block diagnostics from running, and `run()` deliberately
@@ -633,7 +815,7 @@ fn print_json(checks: &[Check], conn: &ConnectionInfo) {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let output = serde_json::json!({
+    serde_json::json!({
         "status": envelope_status,
         "mode": mode,
         "checks": checks_json,
@@ -641,7 +823,66 @@ fn print_json(checks: &[Check], conn: &ConnectionInfo) {
         "hard_failures": hard_failures,
         "warnings": warnings,
         "advice": if advice.is_empty() { serde_json::Value::Null } else { serde_json::json!(advice) },
-    });
+    })
+}
 
-    println!("{}", output);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(name: &'static str, ok: bool) -> Check {
+        Check {
+            name,
+            ok,
+            detail: String::new(),
+            latency_ms: None,
+            advice: None,
+        }
+    }
+
+    fn group(checks: Option<Vec<Check>>) -> Group {
+        Group {
+            mode: "remote",
+            title: "Remote (--remote)",
+            checks,
+            setup_hint: "",
+        }
+    }
+
+    #[test]
+    fn group_status_separates_failures_warnings_and_unconfigured() {
+        assert_eq!(group(None).status(), "not_configured");
+        assert_eq!(group(Some(vec![check("Server", true)])).status(), "ok");
+        assert_eq!(
+            group(Some(vec![check("Server", true), check("Version", false)])).status(),
+            "warning"
+        );
+        assert_eq!(
+            group(Some(vec![check("Server", false), check("Version", false)])).status(),
+            "error"
+        );
+    }
+
+    #[test]
+    fn only_diagnosed_groups_without_hard_failures_are_usable() {
+        assert!(!group(None).usable());
+        assert!(group(Some(vec![check("Version", false)])).usable());
+        assert!(!group(Some(vec![check("Connection", false)])).usable());
+    }
+
+    #[test]
+    fn local_without_a_desktop_reports_a_connection_failure() {
+        // No port file in a fresh HOME: resolution fails before any network.
+        crate::test_helpers::with_temp_home("doctor_no_desktop", |_home| {
+            let (mode, checks) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(diagnose(None, None, false, false, None));
+            assert!(matches!(mode, ConnectionMode::Local));
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0].name, "Connection");
+            assert!(!checks[0].ok);
+        });
+    }
 }

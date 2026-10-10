@@ -92,55 +92,48 @@ pub async fn status(json_mode: bool) -> Result<()> {
         Ok(stored) => stored,
         Err(e) => return output::print_error(&e.to_string(), json_mode),
     };
-    let lan_json = lan_status_json(lan.as_ref());
-
-    let Some(key) = key else {
-        if json_mode {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "success",
-                    "configured": false,
-                    "hint": "Run `linkly auth login` (or `linkly auth set-key <api-key>`) to configure remote access.",
-                    "lan": lan_json,
-                })
-            );
-        } else {
-            println!("{}", "Linkly AI Auth".bold());
-            println!("  {}  {}", "Key:".dimmed(), "not configured".yellow());
-            println!("  {}  {}", "LAN:".dimmed(), lan_summary(lan.as_ref()));
-            println!("\n  Run `linkly auth login` to enable --remote,");
-            println!("  or paste a key from https://linkly.ai (Dashboard > API Keys) with `linkly auth set-key <api-key>`.");
-            if lan.is_none() {
-                println!(
-                    "  Run `linkly auth set-key <token> --lan --endpoint <url>` to enable --lan."
-                );
-            }
-        }
-        return Ok(());
+    let path = credentials_path()?;
+    let source = remote_key_source_name();
+    let probe = match &key {
+        Some(key) => Some(probe_key(key).await),
+        None => None,
     };
 
-    let preview = mask_key(&key);
-    let path = credentials_path()?;
-    let probe = probe_key(&key).await;
-
     if json_mode {
+        // Top-level fields are the original (remote-only) shape, kept for
+        // existing consumers; `remote` mirrors `lan` for new ones.
+        let mut remote = serde_json::json!({ "configured": key.is_some() });
+        if let Some(key) = &key {
+            remote["key_preview"] = serde_json::json!(mask_key(key));
+            remote["source"] = serde_json::json!(source);
+        }
+        match &probe {
+            Some(KeyProbe::Valid { plan }) => {
+                remote["valid"] = serde_json::json!(true);
+                remote["plan"] = serde_json::json!(plan);
+            }
+            Some(KeyProbe::Invalid) => remote["valid"] = serde_json::json!(false),
+            Some(KeyProbe::Unknown { reason }) => {
+                remote["valid"] = serde_json::Value::Null;
+                remote["probe_error"] = serde_json::json!(reason);
+            }
+            None => {}
+        }
         let mut obj = serde_json::json!({
             "status": "success",
-            "configured": true,
-            "key_preview": preview,
+            "configured": key.is_some(),
             "credentials_path": path.display().to_string(),
-            "lan": lan_json,
+            "remote": remote,
+            "lan": lan_status_json(lan.as_ref()),
         });
-        match &probe {
-            KeyProbe::Valid { plan } => {
-                obj["valid"] = serde_json::json!(true);
-                obj["plan"] = serde_json::json!(plan);
-            }
-            KeyProbe::Invalid => obj["valid"] = serde_json::json!(false),
-            KeyProbe::Unknown { reason } => {
-                obj["valid"] = serde_json::Value::Null;
-                obj["probe_error"] = serde_json::json!(reason);
+        if key.is_none() {
+            obj["hint"] = serde_json::json!(
+                "Run `linkly auth login` (or `linkly auth set-key <api-key>`) to configure remote access."
+            );
+        }
+        for field in ["key_preview", "valid", "plan", "probe_error"] {
+            if let Some(value) = obj["remote"].get(field).cloned() {
+                obj[field] = value;
             }
         }
         println!("{}", obj);
@@ -148,31 +141,69 @@ pub async fn status(json_mode: bool) -> Result<()> {
     }
 
     println!("{}", "Linkly AI Auth".bold());
-    println!("  {}   {}", "Key:".dimmed(), preview);
-    match &probe {
-        KeyProbe::Valid { plan } => {
-            println!("  {} {}", "Valid:".dimmed(), "yes".green());
-            println!("  {}  {}", "Plan:".dimmed(), plan);
-        }
-        KeyProbe::Invalid => {
-            println!("  {} {}", "Valid:".dimmed(), "no".red());
-        }
-        KeyProbe::Unknown { reason } => {
+
+    println!("\n  {}", "Remote (--remote)".bold());
+    match &key {
+        None => println!(
+            "    Not configured. Run `linkly auth login` (or `linkly auth set-key <api-key>`)."
+        ),
+        Some(key) => {
             println!(
-                "  {} {} ({})",
-                "Valid:".dimmed(),
-                "unknown".yellow(),
-                reason
+                "    {}     {}  {}",
+                "Key".dimmed(),
+                mask_key(key),
+                remote_key_origin().dimmed()
+            );
+            let state = match &probe {
+                Some(KeyProbe::Valid { plan }) => format!("{}, {} plan", "valid".green(), plan),
+                Some(KeyProbe::Invalid) => format!(
+                    "{}. Run `linkly auth logout`, then `linkly auth login`.",
+                    "rejected".red()
+                ),
+                Some(KeyProbe::Unknown { reason }) => {
+                    format!("{} ({})", "unknown".yellow(), reason)
+                }
+                None => String::new(),
+            };
+            println!("    {}  {}", "Status".dimmed(), state);
+        }
+    }
+
+    println!("\n  {}", "LAN (--lan)".bold());
+    match &lan {
+        None => println!(
+            "    Not configured. Run `linkly auth set-key <token> --lan --endpoint <url>`."
+        ),
+        Some(lan) => {
+            println!("    {} {}", "Desktop".dimmed(), lan.endpoint);
+            println!(
+                "    {}   {}  {}",
+                "Token".dimmed(),
+                mask_lan_token(&lan.token),
+                "not checked here; run `linkly doctor --lan`".dimmed()
             );
         }
     }
-    println!("  {}   {}", "LAN:".dimmed(), lan_summary(lan.as_ref()));
-    println!("  {}  {}", "File:".dimmed(), path.display());
-    // Advice last, so it doesn't split the field list in two.
-    if matches!(probe, KeyProbe::Invalid) {
-        println!("\n  The stored key was rejected. Run `linkly auth logout`, then `linkly auth login` (or `linkly auth set-key <api-key>`).");
-    }
+
+    println!("\n  {} {}", "Credentials file:".dimmed(), path.display());
     Ok(())
+}
+
+/// `source` of the stored remote key for JSON: "login" or "set_key".
+fn remote_key_source_name() -> &'static str {
+    match read_remote_key_source().ok().flatten().as_deref() {
+        Some(LOGIN_KEY_SOURCE) => "login",
+        _ => "set_key",
+    }
+}
+
+/// Where the stored remote key came from, for people. Tells them whether
+/// `logout` will revoke it on the server.
+pub(crate) fn remote_key_origin() -> &'static str {
+    match remote_key_source_name() {
+        "login" => "from auth login",
+        _ => "saved with set-key",
+    }
 }
 
 /// `lan` object of `auth status --json`. The token is never included in full.
@@ -184,14 +215,6 @@ fn lan_status_json(lan: Option<&LanCredentials>) -> serde_json::Value {
             "token_preview": mask_lan_token(&lan.token),
         }),
         None => serde_json::json!({ "configured": false }),
-    }
-}
-
-/// One-line human summary of the saved LAN connection.
-fn lan_summary(lan: Option<&LanCredentials>) -> String {
-    match lan {
-        Some(lan) => format!("{} (token {})", lan.endpoint, mask_lan_token(&lan.token)),
-        None => "not configured".yellow().to_string(),
     }
 }
 
@@ -399,7 +422,7 @@ pub(crate) fn mask_key(key: &str) -> String {
 
 /// Mask a LAN token for display: only the last four characters survive, and
 /// only when the token is long enough that four characters give little away.
-fn mask_lan_token(token: &str) -> String {
+pub(crate) fn mask_lan_token(token: &str) -> String {
     let chars: Vec<char> = token.chars().collect();
     if chars.len() < 16 {
         return "*".repeat(chars.len());
