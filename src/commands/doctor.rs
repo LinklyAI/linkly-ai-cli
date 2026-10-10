@@ -55,10 +55,20 @@ pub async fn run_from_args(
             ConnectionMode::Lan { saved: true, .. } => ("lan", "LAN (--lan)"),
             ConnectionMode::Lan { .. } => ("lan", "LAN (--endpoint)"),
         };
+        // `--remote` / `--lan` without saved credentials fail like any other
+        // check, but the JSON must not claim they were configured.
+        let configured = match &mode {
+            ConnectionMode::Remote => !matches!(connection::read_credentials_api_key(), Ok(None)),
+            ConnectionMode::Lan { saved: true, .. } => {
+                !matches!(connection::read_lan_credentials(), Ok(None))
+            }
+            _ => true,
+        };
         let group = Group {
             mode: mode_name,
             title,
             checks: Some(checks),
+            configured,
             setup_hint: "",
         };
         if json_mode {
@@ -121,12 +131,12 @@ async fn diagnose(
                     "Launch Linkly AI Desktop on this machine, or use --remote / --lan."
                 }
                 ConnectionMode::Remote => concat!(
-                    "Run 'linkly auth login' to sign in ",
+                    "Run `linkly auth login` to sign in ",
                     crate::agent_login_hint!(),
                     ".\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
                 ),
                 ConnectionMode::Lan { saved: true, .. } => {
-                    "Run 'linkly auth set-key <token> --lan --endpoint <url>' to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
+                    "Run `linkly auth set-key <token> --lan --endpoint <url>` to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
                 }
                 ConnectionMode::Lan { .. } => "Check --endpoint and --token values.",
             };
@@ -162,6 +172,9 @@ struct Group {
     title: &'static str,
     /// `None` when there are no credentials for it: shown, not diagnosed.
     checks: Option<Vec<Check>>,
+    /// Whether the connection is set up at all. False also when a flag asked
+    /// for a connection that has no saved credentials (diagnosed, and failed).
+    configured: bool,
     /// What to run to set it up, for the not-configured case.
     setup_hint: &'static str,
 }
@@ -211,11 +224,13 @@ async fn run_all(client: Option<&str>, json_mode: bool) -> Result<()> {
             mode: "local",
             title: "Local (this machine)",
             checks: Some(local.1),
+            configured: true,
             setup_hint: "",
         },
         Group {
             mode: "remote",
             title: "Remote (--remote)",
+            configured: remote.is_some(),
             checks: remote,
             setup_hint: concat!(
                 "Not configured. Run `linkly auth login` to enable --remote ",
@@ -226,6 +241,7 @@ async fn run_all(client: Option<&str>, json_mode: bool) -> Result<()> {
         Group {
             mode: "lan",
             title: "LAN (--lan)",
+            configured: lan.is_some(),
             checks: lan,
             setup_hint:
                 "Not configured. Run `linkly auth set-key <token> --lan --endpoint <url>` to enable --lan.",
@@ -429,16 +445,12 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
             401 => {
                 let advice = match &conn.mode {
                     ConnectionMode::Lan { saved: true, .. } => {
-                        "The saved LAN token was rejected. Copy the current token from Desktop > Settings > MCP\n    and run 'linkly auth set-key <token> --lan --endpoint <url>'."
+                        "The saved LAN token was rejected. Copy the current token from Desktop > Settings > MCP\n    and run `linkly auth set-key <token> --lan --endpoint <url>`."
                     }
                     ConnectionMode::Lan { .. } => {
                         "Check your --token value (find it in Desktop > Settings > MCP)."
                     }
-                    ConnectionMode::Remote => concat!(
-                        "Your API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n    ",
-                        crate::agent_login_hint!(),
-                        "\n    (or 'linkly auth set-key <your-api-key>' with a key from https://linkly.ai Dashboard > API Keys)."
-                    ),
+                    ConnectionMode::Remote => crate::key_rejected_hint!(),
                     _ => "Unexpected auth failure for local connection.",
                 };
                 (
@@ -745,7 +757,7 @@ fn groups_json(groups: &[Group]) -> serde_json::Value {
         .map(|g| match &g.checks {
             Some(checks) => {
                 let mut obj = checks_json_for(checks, g.mode);
-                obj["configured"] = serde_json::json!(true);
+                obj["configured"] = serde_json::json!(g.configured);
                 obj
             }
             None => serde_json::json!({
@@ -849,6 +861,7 @@ mod tests {
         Group {
             mode: "remote",
             title: "Remote (--remote)",
+            configured: checks.is_some(),
             checks,
             setup_hint: "",
         }

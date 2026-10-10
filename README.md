@@ -300,11 +300,11 @@ missing would be a false alarm; `status` labels the path as legacy, and
 
 The CLI supports three connection modes:
 
-| Mode       | Flags                                       | Auth                               | How it works                                    |
-| ---------- | ------------------------------------------- | ---------------------------------- | ----------------------------------------------- |
-| **Local**  | _(default)_                                 | None (localhost)                   | Reads `~/.linkly/port`, connects to `127.0.0.1` |
-| **LAN**    | `--lan`, or `--endpoint <url> --token <tk>` | LAN token via `auth set-key --lan` | Direct connection to a LAN device               |
-| **Remote** | `--remote`                                  | API Key via `auth set-key`         | Connects via `https://mcp.linkly.ai` tunnel     |
+| Mode       | Flags                                       | Auth                                 | How it works                                    |
+| ---------- | ------------------------------------------- | ------------------------------------ | ----------------------------------------------- |
+| **Local**  | _(default)_                                 | None (localhost)                     | Reads `~/.linkly/port`, connects to `127.0.0.1` |
+| **LAN**    | `--lan`, or `--endpoint <url> --token <tk>` | LAN token via `auth set-key --lan`   | Direct connection to a LAN device               |
+| **Remote** | `--remote`                                  | API Key via `auth login` / `set-key` | Connects via `https://mcp.linkly.ai` tunnel     |
 
 > **Note:** Without `--lan` or `--remote` the CLI only talks to the desktop on this machine. `--lan`, `--remote` and `--endpoint` are mutually exclusive; `--endpoint` and `--token` are required together and ignore the saved LAN connection.
 
@@ -406,16 +406,17 @@ commands in a terminal should not have to name themselves. Printable ASCII, up
 to 64 characters; anything else is ignored rather than rejected, so a bad value
 never fails a call.
 
-| Flag               | Scope  | Description                                                                                        |
-| ------------------ | ------ | -------------------------------------------------------------------------------------------------- |
-| `--lan`            | LAN    | Connect to the LAN desktop saved by `auth set-key --lan` (conflicts with `--remote`, `--endpoint`) |
-| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`     |
-| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)        |
-| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth set-key`)  |
-| `--json`           | Global | Output in JSON format (useful for scripting)                                                       |
-| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it            |
-| `-V, --version`    | Global | Print version                                                                                      |
-| `-h, --help`       | Global | Print help                                                                                         |
+| Flag               | Scope  | Description                                                                                                       |
+| ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------- |
+| `--lan`            | LAN    | Connect to the LAN desktop saved by `auth set-key --lan` (conflicts with `--remote`, `--endpoint`)                |
+| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`                    |
+| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)                       |
+| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth login` or `auth set-key`) |
+| `--json`           | Global | One JSON object per result, errors included (for programs that parse the output)                                  |
+| `--exit-code`      | Global | Exit 0 = results, 1 = nothing matched (search, find-paths, grep, list), 2 = failed                                |
+| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it                           |
+| `-V, --version`    | Global | Print version                                                                                                     |
+| `-h, --help`       | Global | Print help                                                                                                        |
 
 ## Examples
 

@@ -6,6 +6,21 @@ use clap::{Args, Parser, Subcommand};
 pub const COMMUNITY_URL: &str = "https://linkly.ai/docs/en/community";
 
 const AFTER_HELP: &str = "\
+Connections (commands that read or write documents):
+  (no flag)   the Linkly AI Desktop on this machine
+  --lan       a Desktop on your local network, saved with
+              `linkly auth set-key <token> --lan --endpoint <url>`
+  --remote    the remote gateway (https://mcp.linkly.ai): your Desktop through
+              the tunnel (Pro, Desktop online) plus linked cloud:// libraries
+              (any plan, Desktop may be offline). Sign in: `linkly auth login`
+              (agents: see `linkly auth login --help`)
+  `linkly doctor` checks all of them; notes always live on the Desktop machine.
+
+Environment:
+  LINKLY_CONFIG_DIR      where credentials live (default ~/.linkly); one directory = one account
+  LINKLY_NO_SKILLS_HINT  set to 1 to silence the agent-skill update notice
+  LINKLY_WEB_URL         override https://linkly.ai for `auth login` (development only)
+
 Docs:      https://linkly.ai/docs
 Community: https://linkly.ai/docs/en/community";
 
@@ -20,25 +35,25 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// Output in JSON format, for scripts that parse the result. Agents reading
-    /// the output themselves should not pass it — plain text is the default and
-    /// the documented path
+    /// Print one JSON object per result (errors too), for programs that parse
+    /// the output. If you read the output yourself, leave it off: plain text is
+    /// shorter. Has no effect on set-key, self-update, skills install/update,
+    /// completions and mcp
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Distinguish "no results" from "failed" in the exit code: 0 = results,
-    /// 1 = ran fine but matched nothing, 2 = failed. Without this flag any
-    /// successful run exits 0 and any failure exits 1 (the historical
-    /// behaviour), so existing scripts keep working.
+    /// Exit 0 = results, 1 = nothing matched (search, find-paths, grep, list
+    /// only), 2 = failed. Without it: 0 = success, 1 = failure. Invalid
+    /// arguments always exit 2
     #[arg(long, global = true)]
     pub exit_code: bool,
 
-    /// Name of the AI application making this call, e.g. `claude-code`.
+    /// Name of the calling AI application, e.g. `claude-code`. Agents: always pass it.
     ///
-    /// ALWAYS PASS THIS when you are an agent. Desktop keeps a local access log
-    /// so the user can see which applications read their documents; without a
-    /// name your calls land there as an anonymous "local" entry and the user
-    /// cannot tell you apart from anything else on the machine.
+    /// Desktop keeps a local access log so the user can see which applications
+    /// read their documents; without a name your calls land there as an
+    /// anonymous "local" entry and the user cannot tell you apart from anything
+    /// else on the machine.
     ///
     /// It is a label, never a credential: it grants nothing and is never
     /// checked against anything. Printable ASCII, up to 64 characters; anything
@@ -50,29 +65,21 @@ pub struct Cli {
 /// Connection parameters for commands that talk to the Linkly AI server.
 #[derive(Args, Clone, Debug)]
 pub struct ConnectionArgs {
-    /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
-    #[arg(long, requires = "token")]
-    pub endpoint: Option<String>,
-
-    /// Bearer token for LAN authentication (requires --endpoint)
-    #[arg(long, requires = "endpoint")]
-    pub token: Option<String>,
-
-    /// Reach your Desktop through the remote tunnel (https://mcp.linkly.ai)
-    /// instead of over the local network. Local content needs Pro and your
-    /// Desktop online — the tunnel forwards to it, it is not a copy of your
-    /// data in the cloud. Linked cloud libraries are the exception: the cloud
-    /// serves them itself, on any plan and with Desktop offline
-    /// (`--library cloud://owner/slug`). Notes always live on the Desktop
-    /// machine. Needs a saved key: `linkly auth login` or `auth set-key`.
+    /// Use the remote gateway instead of this machine's Desktop (see "Connections" in `linkly --help`)
     #[arg(long, conflicts_with_all = ["endpoint", "token"])]
     pub remote: bool,
 
-    /// Reach a Desktop on your local network using the endpoint and token saved
-    /// by `linkly auth set-key <token> --lan --endpoint <url>`. Without --lan or
-    /// --remote, commands only ever talk to the Desktop on this machine.
+    /// Use the LAN Desktop saved by `linkly auth set-key <token> --lan --endpoint <url>`
     #[arg(long, conflicts_with_all = ["endpoint", "token", "remote"])]
     pub lan: bool,
+
+    /// One-off LAN Desktop address, not saved (with or without /mcp); requires --token. Prefer --lan
+    #[arg(long, requires = "token")]
+    pub endpoint: Option<String>,
+
+    /// LAN access token for --endpoint (from Desktop > Settings > MCP)
+    #[arg(long, requires = "endpoint")]
+    pub token: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -112,7 +119,7 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Search indexed local documents by keywords
+    /// Search indexed documents by keywords
     Search {
         /// Search query
         query: String,
@@ -129,7 +136,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         library: Option<String>,
 
-        /// Glob substring-matched against the file path (no leading/trailing * needed). * = any chars incl. /, ? = one char. Examples: '*.pdf', 'papers', '/abs/dir/'
+        /// Glob substring-matched against the file path, case-sensitive (no leading/trailing * needed). * = any chars incl. /, ? = one char. Examples: '*.pdf', 'papers', '/abs/dir/'
         #[arg(long)]
         path_glob: Option<String>,
 
@@ -141,11 +148,11 @@ pub enum Command {
         #[arg(long)]
         modified_before: Option<String>,
 
-        /// Reorder by modification time: 'newest' (most recent first), 'oldest' (earliest first), or 'default' (no reorder, equivalent to omitting the flag). The desktop schema's default is also 'default', so this keeps the three-layer contract aligned.
+        /// Reorder by modification time: 'newest' (most recent first), 'oldest' (earliest first), or 'default' (relevance order, same as omitting the flag)
         #[arg(long, value_parser = ["default", "newest", "oldest"])]
         time_sort: Option<String>,
 
-        /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to local markdown card notes and IGNORES --library and --path-glob. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
+        /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to your markdown notes and IGNORES --library and --path-glob
         #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: Option<String>,
 
@@ -182,7 +189,7 @@ pub enum Command {
         #[arg(short = 'i', long)]
         ignore_case: bool,
 
-        /// Output mode: content, count
+        /// 'content' (default: matching lines with context) or 'count' (match totals only)
         #[arg(long)]
         mode: Option<String>,
 
@@ -194,7 +201,7 @@ pub enum Command {
         #[arg(long)]
         offset: Option<usize>,
 
-        /// Fuzzy whitespace matching (auto for PDF, force on/off)
+        /// Treat runs of whitespace as one. Omit for auto (on for PDF, off otherwise); true/false forces it
         #[arg(long)]
         fuzzy_whitespace: Option<bool>,
 
@@ -226,7 +233,7 @@ pub enum Command {
         #[arg(long)]
         offset: Option<usize>,
 
-        /// Number of lines to read (max: 500)
+        /// Number of lines to read (default: 200, max: 500)
         #[arg(long)]
         limit: Option<usize>,
 
@@ -238,17 +245,19 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Enumerate a container without full-text matching: indexed files under a
-    /// directory (--scope folder), one library's files (--scope library), or
-    /// your notes (--scope notes). Notes live on the Desktop machine — with
-    /// --remote this reads them through the tunnel, and there is no cloud
-    /// notes store to fall back on when Desktop is offline
+    /// List files in a folder or library, or your notes (no full-text matching)
+    ///
+    /// Enumerates indexed files under a directory (--scope folder), one
+    /// library's files (--scope library), or your notes (--scope notes). Notes
+    /// live on the Desktop machine — with --remote this reads them through the
+    /// tunnel, and there is no cloud notes store to fall back on when Desktop
+    /// is offline
     List {
-        /// Container scope to list. Required. 'folder' lists indexed files under a directory (omit --path to sweep all watched roots), 'library' lists one library's files (requires --library), 'notes' lists the local markdown card notes. Values are validated by the desktop, not here, so a newer desktop's scopes work without upgrading the CLI
+        /// Container scope to list. Required. 'folder' lists indexed files under a directory (omit --path to sweep all watched roots), 'library' lists one library's files (requires --library), 'notes' lists your markdown notes
         #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: String,
 
-        /// Which library to list (--scope library only; required there). A plain name or local://<id>; see `linkly list-libraries`
+        /// Which library to list (--scope library only; required there). Local: a plain name or local://<id>. Cloud (--remote only): cloud://<owner>/<slug>. See `linkly list-libraries`
         #[arg(long, value_hint = clap::ValueHint::Other)]
         library: Option<String>,
 
@@ -296,10 +305,12 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Create or rewrite a markdown note in your Desktop's Notes folder. With
-    /// --remote the write still lands on that machine, forwarded through the
-    /// tunnel — notes are never stored in the cloud, so there is no cloud
-    /// library to target and none to fall back on when Desktop is offline
+    /// Create or rewrite a markdown note on your Desktop
+    ///
+    /// Writes to the Notes folder of your Desktop. With --remote the write still
+    /// lands on that machine, forwarded through the tunnel — notes are never
+    /// stored in the cloud, so there is no cloud library to target and none to
+    /// fall back on when Desktop is offline
     NoteSave {
         /// Operation mode: 'create' writes a new note, 'edit' rewrites an existing one (edit requires --note-id and --base-version together)
         #[arg(long, value_parser = ["create", "edit"])]
@@ -321,7 +332,7 @@ pub enum Command {
         #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
         tags: Option<Vec<String>>,
 
-        /// Display name of the application driving this call (e.g. 'Claude Code'), shown as the note's source badge in the app. Not the model name; omit if unsure. Max 64 chars (desktop-enforced)
+        /// Display name shown as the note's source badge (e.g. 'Claude Code'); not the model name, omit if unsure, max 64 chars. Separate from --client (the access-log label): pass both
         #[arg(long, value_hint = clap::ValueHint::Other)]
         app_name: Option<String>,
 
@@ -329,19 +340,32 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Show Linkly AI app status
+    /// Show Desktop status: version, indexed documents, index state (gateway and tunnel with --remote)
     Status {
         #[command(flatten)]
         conn: ConnectionArgs,
     },
 
-    /// Diagnose connections: without a flag, checks this machine's Desktop plus the remote gateway and LAN Desktop when configured; --remote / --lan / --endpoint check just one
+    /// Diagnose connections: this machine's Desktop, plus remote and LAN when configured
+    #[command(long_about = "\
+Diagnose connections, one group per connection with advice for each failure.
+
+Without a flag: checks the Desktop on this machine, plus the remote gateway and
+the saved LAN Desktop when credentials for them exist, concurrently. Exits 0 when
+at least one connection works — read each group's status for the one you need.
+With --remote, --lan or --endpoint/--token: checks only that connection, and the
+exit code reflects only it.")]
     Doctor {
         #[command(flatten)]
         conn: ConnectionArgs,
     },
 
-    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Default bridges to the local desktop; --remote bridges through the cloud gateway (local + cloud libraries). Pass --client <your-app-name> so the user can see who is calling.
+    /// Run as an MCP stdio bridge for MCP clients that only speak stdio
+    ///
+    /// For clients such as Claude Desktop. Default: the Linkly AI Desktop on
+    /// this machine; --remote: the remote gateway (adds cloud:// libraries).
+    /// There is no LAN mode: LAN clients connect to Desktop over HTTP. Pass
+    /// --client <app-name> so the user can see who is calling.
     Mcp {
         /// Not supported: kept (hidden) only so that passing it fails with
         /// guidance instead of a bare "unexpected argument". LAN clients
@@ -349,17 +373,17 @@ pub enum Command {
         #[arg(long, hide = true, conflicts_with = "remote")]
         endpoint: Option<String>,
 
-        /// Bridge through the cloud gateway (https://mcp.linkly.ai), reaching local and linked cloud libraries. Requires `linkly auth login` (or `linkly auth set-key`) first.
+        /// Bridge through the remote gateway (https://mcp.linkly.ai): your Desktop plus linked cloud libraries. Needs a saved key (`linkly auth login` or `set-key`)
         #[arg(long, conflicts_with = "endpoint")]
         remote: bool,
     },
 
     /// Print a shell completion script
     #[command(long_about = "\
-Print a shell completion script to stdout.
+Print a shell completion script to stdout
 
 The script is static: it completes subcommands, flags and fixed value sets. It
-does not query the desktop app, so it never blocks your prompt and works with
+does not query Desktop, so it never blocks your prompt and works with
 Linkly AI closed.
 
   bash        linkly completions bash > /usr/local/etc/bash_completion.d/linkly
@@ -388,7 +412,7 @@ under oh-my-zsh); a bare zsh needs `autoload -Uz compinit && compinit` in
 
     /// Install, update, or inspect the linkly-ai agent skill
     #[command(long_about = "\
-Install, update, or inspect the linkly-ai agent skill.
+Install, update, or inspect the linkly-ai agent skill
 
 When an update is available, command output carries a one-line notice, at most
 once every four hours. Set LINKLY_NO_SKILLS_HINT=1 to turn it off. `linkly mcp` inherits
@@ -417,8 +441,8 @@ pub enum AuthAction {
     /// Save an API key for remote access, or a LAN token with --lan
     #[command(after_help = "\
 Examples:
-  linkly auth set-key lkai_xxx                                     # remote (default)
-  linkly auth set-key <token> --lan --endpoint http://192.168.1.100:60606
+  linkly auth set-key lkai_xxx                                          # remote (default)
+  linkly auth set-key <token> --lan --endpoint http://192.168.1.100:60606  # LAN (/mcp optional)
 
 Find the LAN address and token in Linkly AI Desktop > Settings > MCP.")]
     SetKey {
@@ -438,9 +462,9 @@ Find the LAN address and token in Linkly AI Desktop > Settings > MCP.")]
         endpoint: Option<String>,
     },
 
-    /// Sign in through the browser and save a new API key for remote access
+    /// Sign in through the browser for --remote. Agents: --no-wait, then --wait (see --help)
     #[command(long_about = "\
-Sign in through the browser and save a new API key for remote access.
+Sign in through the browser and save a new API key for remote access
 
 AGENTS: don't run plain `linkly auth login` — it waits in the foreground until
 the link is approved, so the user never sees the link. Use two steps, in the
@@ -461,7 +485,7 @@ One config directory holds one account (see LINKLY_CONFIG_DIR). Failures carry
 a code in --json mode: timeout, expired, denied, no_pending_login,
 login_in_progress, already_logged_in, network.")]
     Login {
-        /// Start the login and return the link immediately; finish with --wait
+        /// Start the login and print the link immediately (agents: use this, send url + code to the user, then run --wait)
         #[arg(long, conflicts_with = "wait")]
         no_wait: bool,
 

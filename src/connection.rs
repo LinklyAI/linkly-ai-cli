@@ -103,19 +103,19 @@ impl ConnectionInfo {
     pub fn doctor_hint(&self) -> String {
         match &self.mode {
             ConnectionMode::Local => {
-                "Run 'linkly doctor' to diagnose local connection issues.".to_string()
+                "Run `linkly doctor` to diagnose local connection issues.".to_string()
             }
             ConnectionMode::Lan { saved: true, .. } => {
-                "Run 'linkly doctor --lan' to diagnose LAN connection issues.".to_string()
+                "Run `linkly doctor --lan` to diagnose LAN connection issues.".to_string()
             }
             ConnectionMode::Lan { endpoint, .. } => {
                 format!(
-                    "Run 'linkly doctor --endpoint {} --token <your-token>' to diagnose LAN connection issues.",
+                    "Run `linkly doctor --endpoint {} --token <your-token>` to diagnose LAN connection issues.",
                     endpoint
                 )
             }
             ConnectionMode::Remote => {
-                "Run 'linkly doctor --remote' to diagnose remote connection issues.".to_string()
+                "Run `linkly doctor --remote` to diagnose remote connection issues.".to_string()
             }
         }
     }
@@ -156,7 +156,7 @@ pub fn resolve(
                  To set up:\n  \
                    1. Find the LAN address and token in Linkly AI Desktop > Settings > MCP\n  \
                    2. Run: linkly auth set-key <token> --lan --endpoint <url>\n\n\
-                 Run 'linkly doctor --lan' to diagnose LAN connection issues.",
+                 Run `linkly doctor --lan` to diagnose LAN connection issues.",
         )?;
         return Ok(lan_connection(
             &saved.endpoint,
@@ -173,7 +173,7 @@ pub fn resolve(
             "To set up, run: linkly auth login\n  ",
             crate::agent_login_hint!(),
             "\n  (or paste a key from https://linkly.ai Dashboard > API Keys: linkly auth set-key <your-api-key>)\n\n",
-            "Run 'linkly doctor --remote' to diagnose remote connection issues."
+            "Run `linkly doctor --remote` to diagnose remote connection issues."
         ))?;
 
         return Ok(ConnectionInfo {
@@ -199,13 +199,13 @@ pub fn resolve(
                Remote:  linkly <command> --remote  (sign in first: linkly auth login)\n  \
                LAN:     linkly <command> --lan  (save it first: linkly auth set-key <token> --lan --endpoint <url>;\n\
              \x20          find the address and token in Desktop > Settings > MCP)\n\n\
-             Run 'linkly doctor' to diagnose local connection issues."
+             Run `linkly doctor` to diagnose local connection issues."
         )
     })?;
 
     const PORT_FILE_CORRUPT: &str = "Linkly AI Desktop port file is corrupted.\n\
          Try restarting the app, or delete ~/.linkly/port and relaunch.\n\n\
-         Run 'linkly doctor' to diagnose local connection issues.";
+         Run `linkly doctor` to diagnose local connection issues.";
 
     let parsed: serde_json::Value = serde_json::from_str(&content).context(PORT_FILE_CORRUPT)?;
 
@@ -215,7 +215,7 @@ pub fn resolve(
         bail!(
             "Invalid port {} in ~/.linkly/port (must be 1-65535).\n\
              Try restarting the app, or delete ~/.linkly/port and relaunch.\n\n\
-             Run 'linkly doctor' to diagnose local connection issues.",
+             Run `linkly doctor` to diagnose local connection issues.",
             port
         );
     }
@@ -338,7 +338,7 @@ fn read_credentials_file() -> Result<Option<serde_json::Value>> {
     let parsed = serde_json::from_str(&content).with_context(|| {
         format!(
             "Credentials file is corrupted: {}\n\
-             Run 'linkly auth set-key <your-api-key>' to fix it.\n\
+             Run `linkly auth set-key <your-api-key>` to fix it.\n\
              Get your API key from https://linkly.ai (Dashboard > API Keys).",
             path.display()
         )

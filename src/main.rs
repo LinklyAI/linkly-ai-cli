@@ -13,7 +13,7 @@ mod skills;
 mod test_helpers;
 mod version_check;
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 
 use clap::Parser;
 use cli::{AuthAction, Cli, Command, ConnectionArgs};
@@ -64,7 +64,15 @@ async fn main() {
     skills::publish_hint(skills_notice.clone());
     if let Some(notice) = skills_notice {
         if notice_goes_to_stdout(json_mode, manages_skills, owns_stdout) {
-            println!("{}", notice);
+            // On a terminal it leads the output; anywhere else stdout may be
+            // a file or a pipe (`linkly read id > doc.md`) where the line would
+            // corrupt the content, so it goes to stderr, which agent shells
+            // show alongside stdout.
+            if std::io::stdout().is_terminal() {
+                println!("{}", notice);
+            } else {
+                eprintln!("{}", notice);
+            }
         }
     }
 
@@ -109,7 +117,18 @@ async fn main() {
             // other error reaches us with a real message and gets printed.
             let msg = format!("{:#}", e);
             if !msg.is_empty() {
-                eprintln!("Error: {}", msg);
+                if json_mode {
+                    // Failures that never reached a command's own JSON output
+                    // (no saved credentials, Desktop not running, connection
+                    // refused…) still answer --json with one parseable object.
+                    println!(
+                        "{}",
+                        serde_json::json!({ "status": "error", "message": msg })
+                    );
+                    let _ = std::io::stdout().flush();
+                } else {
+                    eprintln!("Error: {}", msg);
+                }
             }
             // Under --exit-code, 2 keeps failures distinct from 1 = matched
             // nothing. Without it, 1 is the historical "something went wrong".

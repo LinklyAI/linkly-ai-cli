@@ -28,6 +28,18 @@ macro_rules! agent_login_hint {
     };
 }
 
+/// The one way every command explains a rejected remote API key.
+#[macro_export]
+macro_rules! key_rejected_hint {
+    () => {
+        concat!(
+            "Your API key was rejected. Run `linkly auth logout`, then `linkly auth login` ",
+            $crate::agent_login_hint!(),
+            ", or save a new key with `linkly auth set-key <api-key>`."
+        )
+    };
+}
+
 /// Linkly AI website, which hosts the browser side of `linkly auth login`
 /// (the approval page and the login API).
 pub const WEB_BASE_URL: &str = "https://linkly.ai";

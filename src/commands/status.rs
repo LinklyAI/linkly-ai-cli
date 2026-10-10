@@ -335,11 +335,7 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let status_code = resp.status().as_u16();
     if status_code == 401 || status_code == 403 {
         let msg = format!(
-            concat!(
-                "Authentication failed ({}). Run `linkly auth logout`, then `linkly auth login` ",
-                crate::agent_login_hint!(),
-                " (or `linkly auth set-key <api-key>`)."
-            ),
+            concat!("Authentication failed ({}). ", crate::key_rejected_hint!()),
             status_code
         );
         if json_mode {

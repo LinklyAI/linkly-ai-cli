@@ -1373,7 +1373,7 @@ mod tests {
     #[test]
     fn bridge_error_maps_transport_failures_to_cloud_guidance() {
         let upstream = anyhow::anyhow!(
-            "Request timed out after 60 seconds. Desktop may have disconnected or the operation is taking too long.\n\nRun 'linkly doctor --remote' to diagnose remote connection issues."
+            "Request timed out after 60 seconds. Desktop may have disconnected or the operation is taking too long.\n\nRun `linkly doctor --remote` to diagnose remote connection issues."
         );
         let mapped = bridge_error(upstream);
         assert_eq!(mapped.code.0, -32603);

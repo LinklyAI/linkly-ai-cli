@@ -96,3 +96,36 @@ fn doctor_explains_mcp_and_sandbox_recovery_for_an_unreachable_desktop() {
         "stdout was: {stdout}"
     );
 }
+
+/// Connection failures that happen before a command can print its own output
+/// (nothing saved, no Desktop) must still answer --json on stdout.
+#[test]
+fn json_mode_reports_connection_failures_as_json_on_stdout() {
+    for args in [
+        &["--json", "search", "x", "--lan"][..],
+        &["--json", "search", "x", "--remote"][..],
+        &["--json", "status"][..],
+    ] {
+        let output = run_linkly(args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let envelope: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("{args:?}: stdout is not JSON ({e}): {stdout}"));
+        assert_eq!(envelope["status"], "error", "{args:?}");
+        assert!(
+            envelope["message"].as_str().is_some_and(|m| !m.is_empty()),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn doctor_flag_without_credentials_is_not_configured() {
+    let output = run_linkly(&["--json", "doctor", "--lan"]);
+    assert_eq!(output.status.code(), Some(1));
+    let envelope: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("JSON");
+    assert_eq!(envelope["groups"][0]["mode"], "lan");
+    assert_eq!(envelope["groups"][0]["configured"], false);
+    assert_eq!(envelope["groups"][0]["status"], "error");
+}

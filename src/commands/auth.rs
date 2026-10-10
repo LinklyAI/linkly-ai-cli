@@ -160,11 +160,7 @@ pub async fn status(json_mode: bool) -> Result<()> {
             let state = match &probe {
                 Some(KeyProbe::Valid { plan }) => format!("{}, {} plan", "valid".green(), plan),
                 Some(KeyProbe::Invalid) => format!(
-                    concat!(
-                        "{}. Run `linkly auth logout`, then `linkly auth login`\n            ",
-                        crate::agent_login_hint!(),
-                        "."
-                    ),
+                    concat!("{}\n            ", crate::key_rejected_hint!()),
                     "rejected".red()
                 ),
                 Some(KeyProbe::Unknown { reason }) => {
