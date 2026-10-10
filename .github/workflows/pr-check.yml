@@ -38,3 +38,9 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+      # install.sh ships to every curl | sh user; run it against a local fixture.
+      - name: Installer script tests
+        run: |
+          shellcheck -s sh scripts/install.sh scripts/test-install.sh
+          scripts/test-install.sh

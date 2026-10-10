@@ -139,8 +139,9 @@ jobs:
           rclone copyto SHA256SUMS "r2:linkly-updater/cli/v${VERSION}/SHA256SUMS"
           rclone copyto SHA256SUMS "r2:linkly-updater/cli/latest/SHA256SUMS"
 
-      # `assets` keeps its url-string shape: shipped desktops, `linkly self-update`
-      # and install.sh all parse it that way. Checksums ride in a sibling map.
+      # `assets` keeps its url-string shape: shipped desktops and `linkly self-update`
+      # parse it that way. Checksums ride in a sibling map. install.sh reads only
+      # `version` here, then takes file names and checksums from v<version>/SHA256SUMS.
       - name: Generate and upload latest.json
         run: |
           VERSION=${{ steps.version.outputs.version }}
