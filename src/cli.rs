@@ -66,6 +66,12 @@ pub struct ConnectionArgs {
     /// is offline. Notes always live on the Desktop machine.
     #[arg(long, conflicts_with_all = ["endpoint", "token"])]
     pub remote: bool,
+
+    /// Reach a Desktop on your local network using the endpoint and token saved
+    /// by `linkly auth set-key <token> --lan --endpoint <url>`. Without --lan or
+    /// --remote, commands only ever talk to the Desktop on this machine.
+    #[arg(long, conflicts_with_all = ["endpoint", "token", "remote"])]
+    pub lan: bool,
 }
 
 #[derive(Subcommand)]
@@ -334,10 +340,12 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Default bridges to the local desktop; --endpoint bridges to a LAN desktop; --remote bridges through the cloud gateway (local + cloud libraries). Pass --client <your-app-name> so the user can see who is calling.
+    /// Run as MCP stdio bridge (for Claude Desktop, etc.). Default bridges to the local desktop; --remote bridges through the cloud gateway (local + cloud libraries). Pass --client <your-app-name> so the user can see who is calling.
     Mcp {
-        /// MCP endpoint URL (e.g. http://192.168.1.100:60606/mcp)
-        #[arg(long, conflicts_with = "remote")]
+        /// Not supported: kept (hidden) only so that passing it fails with
+        /// guidance instead of a bare "unexpected argument". LAN clients
+        /// should connect to Desktop over HTTP directly.
+        #[arg(long, hide = true, conflicts_with = "remote")]
         endpoint: Option<String>,
 
         /// Bridge through the cloud gateway (https://mcp.linkly.ai), reaching local and linked cloud libraries. Requires `linkly auth set-key` first.
@@ -405,17 +413,43 @@ pub enum SkillsAction {
 
 #[derive(Subcommand)]
 pub enum AuthAction {
-    /// Save an API key for remote tunnel access
+    /// Save an API key for remote access, or a LAN token with --lan
+    #[command(after_help = "\
+Examples:
+  linkly auth set-key lkai_xxx                                     # remote (default)
+  linkly auth set-key <token> --lan --endpoint http://192.168.1.100:60606
+
+Find the LAN address and token in Linkly AI Desktop > Settings > MCP.")]
     SetKey {
-        /// API key (format: lkai_...)
+        /// API key (format: lkai_...), or with --lan the Desktop's LAN token
         key: String,
+
+        /// Save the key for remote access via https://mcp.linkly.ai (the default)
+        #[arg(long, conflicts_with = "lan")]
+        remote: bool,
+
+        /// Save a LAN token instead, used by `--lan` on other commands
+        #[arg(long, requires = "endpoint")]
+        lan: bool,
+
+        /// LAN Desktop address (e.g. http://192.168.1.100:60606), required with --lan
+        #[arg(long, requires = "lan")]
+        endpoint: Option<String>,
     },
 
-    /// Show the stored credential and the account it belongs to
+    /// Show the stored credentials (remote key and LAN connection)
     Status,
 
-    /// Remove the stored credential
-    Logout,
+    /// Remove the stored remote key, or the LAN connection with --lan
+    Logout {
+        /// Remove the remote API key (the default)
+        #[arg(long, conflicts_with = "lan")]
+        remote: bool,
+
+        /// Remove the saved LAN connection instead
+        #[arg(long)]
+        lan: bool,
+    },
 }
 
 #[cfg(test)]
@@ -604,5 +638,39 @@ mod tests {
         assert!(parse(&["auth", "status"]).is_ok());
         assert!(parse(&["auth", "logout"]).is_ok());
         assert!(parse(&["auth", "set-key", "lkai_x"]).is_ok());
+    }
+
+    #[test]
+    fn auth_targets_remote_by_default_and_lan_on_request() {
+        assert!(parse(&["auth", "set-key", "lkai_x", "--remote"]).is_ok());
+        assert!(parse(&["auth", "set-key", "tk", "--lan", "--endpoint", "http://x:1"]).is_ok());
+        assert!(parse(&["auth", "logout", "--remote"]).is_ok());
+        assert!(parse(&["auth", "logout", "--lan"]).is_ok());
+    }
+
+    #[test]
+    fn auth_rejects_inconsistent_targets() {
+        // --lan needs an address, and an address only makes sense with --lan.
+        assert!(parse(&["auth", "set-key", "tk", "--lan"]).is_err());
+        assert!(parse(&["auth", "set-key", "tk", "--endpoint", "http://x:1"]).is_err());
+        assert!(parse(&[
+            "auth",
+            "set-key",
+            "tk",
+            "--remote",
+            "--lan",
+            "--endpoint",
+            "http://x:1"
+        ])
+        .is_err());
+        assert!(parse(&["auth", "logout", "--remote", "--lan"]).is_err());
+    }
+
+    #[test]
+    fn mcp_endpoint_still_parses_so_it_can_fail_with_guidance() {
+        // Hidden but accepted: the bridge rejects it at run time with an
+        // explanation, which beats clap's "unexpected argument".
+        assert!(parse(&["mcp", "--endpoint", "http://x:1/mcp"]).is_ok());
+        assert!(parse(&["mcp", "--lan"]).is_err());
     }
 }

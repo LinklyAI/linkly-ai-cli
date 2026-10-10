@@ -141,6 +141,7 @@ fn resolve_conn(
     connection::resolve(
         conn.endpoint.as_deref(),
         conn.token.as_deref(),
+        conn.lan,
         conn.remote,
         client,
     )
@@ -154,9 +155,22 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
 
     match cli.command {
         Command::Auth { action } => match action {
-            AuthAction::SetKey { key } => commands::auth::set_key(&key),
+            AuthAction::SetKey {
+                key,
+                lan: true,
+                endpoint: Some(endpoint),
+                ..
+            } => commands::auth::set_lan_key(&key, &endpoint),
+            AuthAction::SetKey { key, .. } => commands::auth::set_key(&key),
             AuthAction::Status => commands::auth::status(json_mode).await,
-            AuthAction::Logout => commands::auth::logout(json_mode),
+            AuthAction::Logout { lan, .. } => {
+                let target = if lan {
+                    commands::auth::CredentialTarget::Lan
+                } else {
+                    commands::auth::CredentialTarget::Remote
+                };
+                commands::auth::logout(target, json_mode)
+            }
         }
         .map(found),
         Command::Status { conn } => {

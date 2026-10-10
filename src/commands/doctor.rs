@@ -34,9 +34,10 @@ pub async fn run_from_args(
     // Determine mode from args (before resolve, which may fail)
     let mode = if args.remote {
         ConnectionMode::Remote
-    } else if args.endpoint.is_some() {
+    } else if args.endpoint.is_some() || args.lan {
         ConnectionMode::Lan {
             endpoint: args.endpoint.clone().unwrap_or_default(),
+            saved: args.lan,
         }
     } else {
         ConnectionMode::Local
@@ -45,6 +46,7 @@ pub async fn run_from_args(
     match connection::resolve(
         args.endpoint.as_deref(),
         args.token.as_deref(),
+        args.lan,
         args.remote,
         client,
     ) {
@@ -58,11 +60,15 @@ pub async fn run_from_args(
                 latency_ms: None,
                 advice: match &mode {
                     ConnectionMode::Local => Some(
-                        "Launch Linkly AI Desktop on this machine, or use --remote / --endpoint."
+                        "Launch Linkly AI Desktop on this machine, or use --remote / --lan."
                             .to_string(),
                     ),
                     ConnectionMode::Remote => Some(
                         "Run 'linkly auth set-key <your-api-key>' to configure.\n    Get your API key from https://linkly.ai (Dashboard > API Keys)."
+                            .to_string(),
+                    ),
+                    ConnectionMode::Lan { saved: true, .. } => Some(
+                        "Run 'linkly auth set-key <token> --lan --endpoint <url>' to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
                             .to_string(),
                     ),
                     ConnectionMode::Lan { .. } => Some(
@@ -283,6 +289,9 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
         let (detail, advice) = match status {
             401 => {
                 let advice = match &conn.mode {
+                    ConnectionMode::Lan { saved: true, .. } => {
+                        "The saved LAN token was rejected. Copy the current token from Desktop > Settings > MCP\n    and run 'linkly auth set-key <token> --lan --endpoint <url>'."
+                    }
                     ConnectionMode::Lan { .. } => {
                         "Check your --token value (find it in Desktop > Settings > MCP)."
                     }

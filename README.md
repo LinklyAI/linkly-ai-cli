@@ -6,7 +6,7 @@ The CLI connects to the Linkly AI desktop app's MCP server, giving you fast acce
 
 ## Prerequisites
 
-By default, the **Linkly AI desktop app** must be running with MCP server enabled. The CLI automatically discovers the app via `~/.linkly/port`. Alternatively, use LAN mode (`--endpoint` + `--token`) or Remote mode (`--remote` with a saved API key) — see [Connection Modes](#connection-modes).
+By default, the **Linkly AI desktop app** must be running with MCP server enabled. The CLI automatically discovers the app via `~/.linkly/port`. Alternatively, use LAN mode (`--lan` with a saved LAN token) or Remote mode (`--remote` with a saved API key) — see [Connection Modes](#connection-modes).
 
 ## Installation
 
@@ -209,14 +209,20 @@ it also advertises the two cloud-only tools the gateway implements — `library_
 (find cloud libraries in the catalog, including ones not linked yet) and `library_link`
 (link one so `search` / `explore` / `list` can use it, or with `action: "unlink"` release a
 link the user named, e.g. when the Slot quota is full) — and the server instructions
-describe that reach. Local and LAN bridges never advertise them: the desktop does not
+describe that reach. The local bridge never advertises them: the desktop does not
 implement them, so the tool list matches what the upstream can actually serve.
+
+The bridge serves the desktop on this machine or the cloud gateway — it does not bridge to a
+desktop on the LAN. A client on another machine should connect to the desktop's LAN HTTP
+endpoint directly (copy the config from the desktop app's Settings → MCP), or bridge with
+`--remote`.
 
 ### Diagnose Connection Issues
 
 ```bash
 linkly doctor
 linkly doctor --remote
+linkly doctor --lan
 linkly doctor --endpoint http://192.168.1.100:60606/mcp --token abc123
 ```
 
@@ -287,13 +293,13 @@ missing would be a false alarm; `status` labels the path as legacy, and
 
 The CLI supports three connection modes:
 
-| Mode       | Flags                              | Auth                          | How it works                                    |
-| ---------- | ---------------------------------- | ----------------------------- | ----------------------------------------------- |
-| **Local**  | _(default)_                        | None (localhost)              | Reads `~/.linkly/port`, connects to `127.0.0.1` |
-| **LAN**    | `--endpoint <url> --token <token>` | Bearer token from desktop app | Direct connection to a LAN device               |
-| **Remote** | `--remote`                         | API Key via `auth set-key`    | Connects via `https://mcp.linkly.ai` tunnel     |
+| Mode       | Flags                                       | Auth                               | How it works                                    |
+| ---------- | ------------------------------------------- | ---------------------------------- | ----------------------------------------------- |
+| **Local**  | _(default)_                                 | None (localhost)                   | Reads `~/.linkly/port`, connects to `127.0.0.1` |
+| **LAN**    | `--lan`, or `--endpoint <url> --token <tk>` | LAN token via `auth set-key --lan` | Direct connection to a LAN device               |
+| **Remote** | `--remote`                                  | API Key via `auth set-key`         | Connects via `https://mcp.linkly.ai` tunnel     |
 
-> **Note:** `--endpoint` and `--token` are required together for LAN access and conflict with `--remote`. For remote access, use `linkly auth set-key`. The `mcp` command also accepts `--endpoint` alone (without `--token`).
+> **Note:** Without `--lan` or `--remote` the CLI only talks to the desktop on this machine. `--lan`, `--remote` and `--endpoint` are mutually exclusive; `--endpoint` and `--token` are required together and ignore the saved LAN connection.
 
 ### Remote mode setup
 
@@ -305,16 +311,33 @@ linkly auth set-key lkai_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 linkly search "machine learning" --remote
 ```
 
-### LAN mode with token
+### LAN mode setup
 
 ```bash
-# Connect to another device on the same network (token from desktop Settings → MCP)
+# Save the LAN address and token once (both from the desktop app's Settings → MCP)
+linkly auth set-key your_lan_token --lan --endpoint http://192.168.1.100:60606
+
+# Search the desktop on that device
+linkly search "report" --lan
+
+# Or pass both explicitly for a one-off call, without saving anything
 linkly search "report" --endpoint http://192.168.1.100:60606/mcp --token your_lan_token
+```
+
+### Managing saved credentials
+
+The remote API key and the LAN connection live side by side in `~/.linkly/credentials.json`
+(owner-only permissions); saving or removing one never touches the other.
+
+```bash
+linkly auth status          # show both
+linkly auth logout          # remove the remote API key (same as --remote)
+linkly auth logout --lan    # remove the LAN connection
 ```
 
 ## Options
 
-Connection options (`--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `--endpoint` alone is also available on `mcp`. `--json` and `--client` are available on all commands.
+Connection options (`--lan`, `--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `mcp` accepts only `--remote`. `--json` and `--client` are available on all commands.
 
 ### Naming yourself with `--client`
 
@@ -337,15 +360,16 @@ commands in a terminal should not have to name themselves. Printable ASCII, up
 to 64 characters; anything else is ignored rather than rejected, so a bad value
 never fails a call.
 
-| Flag               | Scope  | Description                                                                                       |
-| ------------------ | ------ | ------------------------------------------------------------------------------------------------- |
-| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`    |
-| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)       |
-| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth set-key`) |
-| `--json`           | Global | Output in JSON format (useful for scripting)                                                      |
-| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it           |
-| `-V, --version`    | Global | Print version                                                                                     |
-| `-h, --help`       | Global | Print help                                                                                        |
+| Flag               | Scope  | Description                                                                                        |
+| ------------------ | ------ | -------------------------------------------------------------------------------------------------- |
+| `--lan`            | LAN    | Connect to the LAN desktop saved by `auth set-key --lan` (conflicts with `--remote`, `--endpoint`) |
+| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`     |
+| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)        |
+| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth set-key`)  |
+| `--json`           | Global | Output in JSON format (useful for scripting)                                                       |
+| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it            |
+| `-V, --version`    | Global | Print version                                                                                      |
+| `-h, --help`       | Global | Print help                                                                                         |
 
 ## Examples
 
@@ -353,8 +377,8 @@ never fails a call.
 # Local search (default, requires desktop app running)
 linkly search "budget report"
 
-# Search across LAN with token
-linkly search "budget report" --endpoint http://192.168.1.100:60606/mcp --token abc123
+# Search across LAN (after `linkly auth set-key <token> --lan --endpoint <url>`)
+linkly search "budget report" --lan
 
 # Search via remote tunnel
 linkly search "TODO" --remote

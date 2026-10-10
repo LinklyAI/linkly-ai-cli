@@ -315,6 +315,10 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
             let body = resp.text().await.unwrap_or_default();
             let advice = match &conn.mode {
                 ConnectionMode::Local => "",
+                ConnectionMode::Lan { saved: true, .. } => {
+                    "\nThe saved LAN token was rejected. Copy the current token from Desktop > Settings > MCP\n\
+                     and run 'linkly auth set-key <token> --lan --endpoint <url>'."
+                }
                 ConnectionMode::Lan { .. } => {
                     "\nCheck your --token value (find it in Desktop > Settings > MCP)."
                 }

@@ -6,8 +6,13 @@ const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
 const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
 
 /// Credentials file path: ~/.linkly/credentials.json
-/// New format: { "remotes": [{ "name": "default", "key": "lkai_xxx" }] }
+/// New format: { "remotes": [{ "name": "default", "key": "lkai_xxx" }],
+///               "lan": { "endpoint": "http://192.168.1.100:60606", "token": "..." } }
 /// Legacy format (still readable): { "apiKey": "lkai_xxx" }
+///
+/// Each section is owned by one command (`auth set-key` / `auth set-key --lan`),
+/// and every write merges into the existing file, so saving one never drops the
+/// other — or any field a newer CLI version added that this one doesn't know.
 const CREDENTIALS_FILE: &str = "credentials.json";
 
 /// Remote tunnel health response (from DO /health endpoint).
@@ -23,7 +28,13 @@ pub struct RemoteHealthResponse {
 #[derive(Debug, Clone)]
 pub enum ConnectionMode {
     Local,
-    Lan { endpoint: String },
+    /// `saved` is true when the endpoint and token came from the credentials
+    /// file (`--lan`) rather than from `--endpoint` / `--token`, so hints can
+    /// point the user back at the same spelling they used.
+    Lan {
+        endpoint: String,
+        saved: bool,
+    },
     Remote,
 }
 
@@ -94,7 +105,10 @@ impl ConnectionInfo {
             ConnectionMode::Local => {
                 "Run 'linkly doctor' to diagnose local connection issues.".to_string()
             }
-            ConnectionMode::Lan { endpoint } => {
+            ConnectionMode::Lan { saved: true, .. } => {
+                "Run 'linkly doctor --lan' to diagnose LAN connection issues.".to_string()
+            }
+            ConnectionMode::Lan { endpoint, .. } => {
                 format!(
                     "Run 'linkly doctor --endpoint {} --token <your-token>' to diagnose LAN connection issues.",
                     endpoint
@@ -109,44 +123,50 @@ impl ConnectionInfo {
 
 /// Resolve the MCP endpoint.
 ///
-/// Three modes:
+/// Four modes:
 /// 1. `--endpoint` + `--token` → explicit endpoint (LAN mode, both required by clap)
-/// 2. `--remote` → read ~/.linkly/credentials.json, connect to mcp.linkly.ai
+/// 2. `--lan` → LAN endpoint and token saved by `auth set-key --lan`
+/// 3. `--remote` → read ~/.linkly/credentials.json, connect to mcp.linkly.ai
 ///    (`token` is always ignored in this mode; authentication uses credentials file)
-/// 3. Default → read ~/.linkly/port (local mode, no auth)
+/// 4. Default → read ~/.linkly/port (local mode, no auth)
 ///
-/// Note: `endpoint`/`token` and `remote` are mutually exclusive (enforced by clap).
-/// When called from `mcp` command, `token` is always `None` and `remote` is `false`.
+/// Note: `endpoint`/`token`, `lan` and `remote` are mutually exclusive
+/// (enforced by clap). Without any of them the CLI only ever talks to the local
+/// Desktop — a saved LAN connection is never picked up implicitly.
 ///
 /// `client` is the caller's `--client` value; it rides along on every mode and
 /// never affects which one is chosen.
 pub fn resolve(
     endpoint: Option<&str>,
     token: Option<&str>,
+    lan: bool,
     remote: bool,
     client: Option<&str>,
 ) -> Result<ConnectionInfo> {
     let client_name = client.and_then(sanitize_client_name);
     // Mode 1: explicit endpoint + token for LAN auth
     if let Some(ep) = endpoint {
-        let trimmed = ep.trim_end_matches('/');
-        let base = trimmed.strip_suffix("/mcp").unwrap_or(trimmed).to_string();
-        let mcp = format!("{}/mcp", base);
-        let auth_header = token.map(|t| format!("Bearer {}", t));
-        let mode = ConnectionMode::Lan {
-            endpoint: base.clone(),
-        };
-        return Ok(ConnectionInfo {
-            mcp_url: mcp,
-            base_url: base,
-            auth_header,
-            is_remote: false,
-            mode,
-            client_name,
-        });
+        return Ok(lan_connection(ep, token, false, client_name));
     }
 
-    // Mode 2: remote tunnel via mcp.linkly.ai
+    // Mode 2: LAN endpoint + token saved in the credentials file
+    if lan {
+        let saved = read_lan_credentials()?.context(
+            "No LAN connection saved.\n\n\
+                 To set up:\n  \
+                   1. Find the LAN address and token in Linkly AI Desktop > Settings > MCP\n  \
+                   2. Run: linkly auth set-key <token> --lan --endpoint <url>\n\n\
+                 Run 'linkly doctor --lan' to diagnose LAN connection issues.",
+        )?;
+        return Ok(lan_connection(
+            &saved.endpoint,
+            Some(&saved.token),
+            true,
+            client_name,
+        ));
+    }
+
+    // Mode 3: remote tunnel via mcp.linkly.ai
     if remote {
         let api_key = read_credentials_api_key()?.context(
             "No API key configured for remote mode.\n\n\
@@ -166,7 +186,7 @@ pub fn resolve(
         });
     }
 
-    // Mode 3: local — read ~/.linkly/port
+    // Mode 4: local — read ~/.linkly/port
     let port_file = dirs::home_dir()
         .map(|h| h.join(".linkly").join("port"))
         .context("Cannot determine home directory")?;
@@ -177,7 +197,8 @@ pub fn resolve(
              How to connect:\n  \
                Local:   Launch Linkly AI Desktop on this machine\n  \
                Remote:  linkly <command> --remote  (API key required, get it from https://linkly.ai)\n  \
-               LAN:     linkly <command> --endpoint <url> --token <token>  (find token in Desktop > Settings > MCP)\n\n\
+               LAN:     linkly <command> --lan  (save it first: linkly auth set-key <token> --lan --endpoint <url>;\n\
+             \x20          find the address and token in Desktop > Settings > MCP)\n\n\
              Run 'linkly doctor' to diagnose local connection issues."
         )
     })?;
@@ -212,36 +233,54 @@ pub fn resolve(
     })
 }
 
+/// Build a LAN connection from an endpoint URL and an optional bearer token.
+fn lan_connection(
+    endpoint: &str,
+    token: Option<&str>,
+    saved: bool,
+    client_name: Option<String>,
+) -> ConnectionInfo {
+    let base = normalize_endpoint(endpoint);
+    ConnectionInfo {
+        mcp_url: format!("{}/mcp", base),
+        auth_header: token.map(|t| format!("Bearer {}", t)),
+        is_remote: false,
+        mode: ConnectionMode::Lan {
+            endpoint: base.clone(),
+            saved,
+        },
+        base_url: base,
+        client_name,
+    }
+}
+
+/// Reduce an endpoint URL to its base: strip trailing `/` and a `/mcp` suffix,
+/// so `http://x:60606`, `http://x:60606/` and `http://x:60606/mcp` all agree.
+pub fn normalize_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim_end_matches('/');
+    trimmed.strip_suffix("/mcp").unwrap_or(trimmed).to_string()
+}
+
+/// LAN connection saved by `linkly auth set-key <token> --lan --endpoint <url>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanCredentials {
+    /// Base URL, already normalized (no trailing `/` or `/mcp`)
+    pub endpoint: String,
+    /// Desktop's LAN access token
+    pub token: String,
+}
+
 /// Read API key from ~/.linkly/credentials.json
 /// Supports new format (remotes[0].key) with fallback to legacy format (apiKey).
 ///
 /// Returns:
 /// - `Ok(Some(key))` — key found and read successfully
-/// - `Ok(None)` — file does not exist (user never ran `auth set-key`)
+/// - `Ok(None)` — file or key does not exist (user never ran `auth set-key`)
 /// - `Err(...)` — file exists but is corrupted or unreadable
 pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
-    let path = credentials_path()?;
-
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "Failed to read credentials file {}: {}",
-                path.display(),
-                e
-            ))
-        }
+    let Some(parsed) = read_credentials_file()? else {
+        return Ok(None);
     };
-
-    let parsed: serde_json::Value = serde_json::from_str(&content).with_context(|| {
-        format!(
-            "Credentials file is corrupted: {}\n\
-             Run 'linkly auth set-key <your-api-key>' to fix it.\n\
-             Get your API key from https://linkly.ai (Dashboard > API Keys).",
-            path.display()
-        )
-    })?;
 
     // New format: { "remotes": [{ "name": "default", "key": "lkai_..." }] }
     if let Some(key) = parsed["remotes"]
@@ -254,6 +293,58 @@ pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
 
     // Legacy format: { "apiKey": "lkai_..." }
     Ok(parsed["apiKey"].as_str().map(|s| s.to_string()))
+}
+
+/// Read the LAN connection from ~/.linkly/credentials.json.
+///
+/// Same contract as [`read_credentials_api_key`]: `Ok(None)` when nothing is
+/// saved, `Err` only when the file itself is unreadable or corrupted. A `lan`
+/// section missing either field counts as not saved.
+pub(crate) fn read_lan_credentials() -> Result<Option<LanCredentials>> {
+    let Some(parsed) = read_credentials_file()? else {
+        return Ok(None);
+    };
+    let lan = &parsed["lan"];
+    match (lan["endpoint"].as_str(), lan["token"].as_str()) {
+        (Some(endpoint), Some(token)) if !endpoint.is_empty() && !token.is_empty() => {
+            Ok(Some(LanCredentials {
+                endpoint: endpoint.to_string(),
+                token: token.to_string(),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Read and parse the credentials file. `Ok(None)` when it does not exist.
+fn read_credentials_file() -> Result<Option<serde_json::Value>> {
+    let path = credentials_path()?;
+    let Some(content) = read_credentials_text(&path)? else {
+        return Ok(None);
+    };
+    let parsed = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Credentials file is corrupted: {}\n\
+             Run 'linkly auth set-key <your-api-key>' to fix it.\n\
+             Get your API key from https://linkly.ai (Dashboard > API Keys).",
+            path.display()
+        )
+    })?;
+    Ok(Some(parsed))
+}
+
+/// Raw file contents. `Ok(None)` when the file does not exist; any other I/O
+/// failure is an error, so callers never mistake "unreadable" for "empty".
+fn read_credentials_text(path: &std::path::Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(c) => Ok(Some(c)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow::anyhow!(
+            "Failed to read credentials file {}: {}",
+            path.display(),
+            e
+        )),
+    }
 }
 
 /// Explain a failed local/LAN connection that an environment proxy is silently
@@ -360,15 +451,104 @@ pub fn credentials_path() -> Result<std::path::PathBuf> {
         .join(CREDENTIALS_FILE))
 }
 
-/// Delete the credentials file.
+/// Fields holding the remote API key: the current `remotes` array and the
+/// legacy `apiKey` that older CLIs wrote.
+const REMOTE_FIELDS: [&str; 2] = ["remotes", "apiKey"];
+/// Field holding the saved LAN connection.
+const LAN_FIELDS: [&str; 1] = ["lan"];
+
+/// Remove the remote API key, keeping everything else in the file.
 ///
-/// Returns whether a file was actually removed. A missing file is **not** an
-/// error: the caller asked for "no stored credentials", and that already holds.
-pub fn delete_credentials() -> Result<bool> {
+/// Returns whether a key was actually removed. A missing file or key is
+/// **not** an error: the caller asked for "no stored key", and that already holds.
+pub fn delete_remote_credentials() -> Result<bool> {
+    remove_credential_fields(&REMOTE_FIELDS)
+}
+
+/// Remove the saved LAN connection, keeping everything else in the file.
+pub fn delete_lan_credentials() -> Result<bool> {
+    remove_credential_fields(&LAN_FIELDS)
+}
+
+/// Save API key to ~/.linkly/credentials.json (new format with remotes array),
+/// leaving the LAN section and any unknown fields untouched.
+pub fn save_credentials_api_key(api_key: &str) -> Result<()> {
+    let mut map = load_credentials_for_update()?;
+    // Drop the legacy field so the file holds a single key, not two that can
+    // disagree.
+    map.remove("apiKey");
+    map.insert(
+        "remotes".to_string(),
+        serde_json::json!([{ "name": "default", "key": api_key }]),
+    );
+    write_credentials_file(map)
+}
+
+/// Save the LAN connection, leaving the remote key and any unknown fields
+/// untouched. `endpoint` is stored normalized.
+pub fn save_lan_credentials(endpoint: &str, token: &str) -> Result<()> {
+    let mut map = load_credentials_for_update()?;
+    map.insert(
+        "lan".to_string(),
+        serde_json::json!({ "endpoint": normalize_endpoint(endpoint), "token": token }),
+    );
+    write_credentials_file(map)
+}
+
+/// Current file contents as a JSON object, ready to be edited and written back.
+///
+/// A missing file starts empty. So does a corrupted one: nothing in it can be
+/// kept, and `set-key` is the documented fix for that state. An unreadable file
+/// is an error — overwriting it could destroy credentials we simply failed to read.
+fn load_credentials_for_update() -> Result<serde_json::Map<String, serde_json::Value>> {
     let path = credentials_path()?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+    let Some(content) = read_credentials_text(&path)? else {
+        return Ok(serde_json::Map::new());
+    };
+    match serde_json::from_str(&content) {
+        Ok(serde_json::Value::Object(map)) => Ok(map),
+        _ => Ok(serde_json::Map::new()),
+    }
+}
+
+/// Remove `fields` from the credentials file; delete the file once nothing is
+/// left in it. Returns whether any field was present.
+///
+/// A corrupted file is deleted outright (reported as removed): nothing in it
+/// was usable anyway, and this is what `auth logout` always did with it.
+fn remove_credential_fields(fields: &[&str]) -> Result<bool> {
+    let path = credentials_path()?;
+    let Some(content) = read_credentials_text(&path)? else {
+        return Ok(false);
+    };
+    let mut map = match serde_json::from_str(&content) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => {
+            remove_credentials_file(&path)?;
+            return Ok(true);
+        }
+    };
+
+    // Not `any()`: it would stop at the first hit and leave the rest behind.
+    let mut removed = false;
+    for field in fields {
+        removed |= map.remove(*field).is_some();
+    }
+    if !removed {
+        return Ok(false);
+    }
+    if map.is_empty() {
+        remove_credentials_file(&path)?;
+    } else {
+        write_credentials_file(map)?;
+    }
+    Ok(true)
+}
+
+fn remove_credentials_file(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(anyhow::anyhow!(
             "Failed to remove credentials file {}: {}",
             path.display(),
@@ -377,8 +557,15 @@ pub fn delete_credentials() -> Result<bool> {
     }
 }
 
-/// Save API key to ~/.linkly/credentials.json (new format with remotes array)
-pub fn save_credentials_api_key(api_key: &str) -> Result<()> {
+/// Write the credentials file atomically with owner-only permissions.
+///
+/// The JSON goes to a temp file in the same directory, which is then renamed
+/// over the target: a crash or full disk mid-write leaves the previous file
+/// intact instead of a truncated one. `tempfile` creates the file 0600 on Unix,
+/// and `persist` replaces an existing target on Windows too.
+fn write_credentials_file(map: serde_json::Map<String, serde_json::Value>) -> Result<()> {
+    use std::io::Write;
+
     let path = credentials_path()?;
     let dir = path
         .parent()
@@ -387,31 +574,19 @@ pub fn save_credentials_api_key(api_key: &str) -> Result<()> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
 
-    let content = serde_json::json!({
-        "remotes": [{ "name": "default", "key": api_key }]
-    });
-    let json_bytes = serde_json::to_string_pretty(&content)?;
+    let json_bytes = serde_json::to_string_pretty(&serde_json::Value::Object(map))?;
 
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .with_context(|| format!("Failed to open credentials file: {}", path.display()))?;
-        file.write_all(json_bytes.as_bytes())
-            .with_context(|| format!("Failed to write credentials: {}", path.display()))?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&path, json_bytes)
-            .with_context(|| format!("Failed to write credentials: {}", path.display()))?;
-    }
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".credentials-")
+        .suffix(".tmp")
+        .tempfile_in(dir)
+        .with_context(|| format!("Failed to create a temp file in {}", dir.display()))?;
+    tmp.write_all(json_bytes.as_bytes())
+        .and_then(|()| tmp.as_file().sync_all())
+        .with_context(|| format!("Failed to write credentials: {}", path.display()))?;
+    tmp.persist(&path)
+        .map_err(|e| e.error)
+        .with_context(|| format!("Failed to write credentials: {}", path.display()))?;
 
     Ok(())
 }
@@ -486,7 +661,14 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_mode() {
-        let info = resolve(Some("http://192.168.1.100:60606/mcp"), None, false, None).unwrap();
+        let info = resolve(
+            Some("http://192.168.1.100:60606/mcp"),
+            None,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(info.mcp_url, "http://192.168.1.100:60606/mcp");
         assert_eq!(info.base_url, "http://192.168.1.100:60606");
         assert!(info.auth_header.is_none());
@@ -494,14 +676,14 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_with_token() {
-        let info = resolve(Some("http://x:60606/mcp"), Some("tk"), false, None).unwrap();
+        let info = resolve(Some("http://x:60606/mcp"), Some("tk"), false, false, None).unwrap();
         assert_eq!(info.mcp_url, "http://x:60606/mcp");
         assert_eq!(info.auth_header, Some("Bearer tk".to_string()));
     }
 
     #[test]
     fn resolve_endpoint_trailing_slash_cleaned() {
-        let info = resolve(Some("http://x:60606/"), None, false, None).unwrap();
+        let info = resolve(Some("http://x:60606/"), None, false, false, None).unwrap();
         assert_eq!(info.base_url, "http://x:60606");
         assert_eq!(info.mcp_url, "http://x:60606/mcp");
     }
@@ -511,7 +693,7 @@ mod tests {
     #[test]
     fn resolve_remote_no_credentials_fails() {
         with_temp_home("remote_no_cred", |_home| {
-            let result = resolve(None, None, true, None);
+            let result = resolve(None, None, false, true, None);
             assert!(result.is_err());
         });
     }
@@ -525,7 +707,7 @@ mod tests {
             std::fs::create_dir_all(&linkly_dir).unwrap();
             std::fs::write(linkly_dir.join("port"), r#"{"port": 60606}"#).unwrap();
 
-            let info = resolve(None, None, false, None).unwrap();
+            let info = resolve(None, None, false, false, None).unwrap();
             assert_eq!(info.mcp_url, "http://127.0.0.1:60606/mcp");
             assert_eq!(info.base_url, "http://127.0.0.1:60606");
             assert!(info.auth_header.is_none());
@@ -535,8 +717,64 @@ mod tests {
     #[test]
     fn resolve_default_no_port_file_fails() {
         with_temp_home("default_no_port", |_home| {
-            let result = resolve(None, None, false, None);
+            let result = resolve(None, None, false, false, None);
             assert!(result.is_err());
+        });
+    }
+
+    // ── Mode 2 — saved LAN connection ───────────────────
+
+    #[test]
+    fn resolve_lan_uses_saved_endpoint_and_token() {
+        with_temp_home("lan_saved", |_home| {
+            save_lan_credentials("http://192.168.1.9:60606/mcp", "tk").unwrap();
+            let info = resolve(None, None, true, false, None).unwrap();
+            assert_eq!(info.mcp_url, "http://192.168.1.9:60606/mcp");
+            assert_eq!(info.base_url, "http://192.168.1.9:60606");
+            assert_eq!(info.auth_header.as_deref(), Some("Bearer tk"));
+            assert!(!info.is_remote);
+            assert!(matches!(info.mode, ConnectionMode::Lan { saved: true, .. }));
+        });
+    }
+
+    #[test]
+    fn resolve_lan_without_saved_connection_explains_set_key() {
+        with_temp_home("lan_unsaved", |_home| {
+            let err = resolve(None, None, true, false, None)
+                .err()
+                .expect("nothing saved");
+            assert!(err.to_string().contains("set-key <token> --lan --endpoint"));
+        });
+    }
+
+    #[test]
+    fn resolve_default_never_falls_back_to_saved_lan() {
+        with_temp_home("lan_not_implicit", |_home| {
+            // No local Desktop, but a LAN connection is saved: the default
+            // mode must still fail rather than silently go to the LAN.
+            save_lan_credentials("http://192.168.1.9:60606", "tk").unwrap();
+            assert!(resolve(None, None, false, false, None).is_err());
+        });
+    }
+
+    #[test]
+    fn explicit_endpoint_wins_over_saved_lan() {
+        with_temp_home("lan_explicit_wins", |_home| {
+            save_lan_credentials("http://192.168.1.9:60606", "saved").unwrap();
+            let info = resolve(
+                Some("http://10.0.0.2:60606"),
+                Some("given"),
+                false,
+                false,
+                None,
+            )
+            .unwrap();
+            assert_eq!(info.base_url, "http://10.0.0.2:60606");
+            assert_eq!(info.auth_header.as_deref(), Some("Bearer given"));
+            assert!(matches!(
+                info.mode,
+                ConnectionMode::Lan { saved: false, .. }
+            ));
         });
     }
 
@@ -594,6 +832,90 @@ mod tests {
                 read_credentials_api_key().unwrap(),
                 Some("lkai_new_format_test01234567890ab".to_string())
             );
+        });
+    }
+
+    #[test]
+    fn saving_keeps_fields_this_version_does_not_know() {
+        with_temp_home("cred_unknown_fields", |home| {
+            let dir = home.join(".linkly");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("credentials.json"),
+                r#"{"remotes":[{"name":"default","key":"lkai_old"}],"future":{"x":1}}"#,
+            )
+            .unwrap();
+
+            save_lan_credentials("http://192.168.1.9:60606", "tk").unwrap();
+            save_credentials_api_key("lkai_new").unwrap();
+
+            let raw: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(dir.join("credentials.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(raw["future"]["x"], 1);
+            assert_eq!(raw["remotes"][0]["key"], "lkai_new");
+            assert_eq!(raw["lan"]["token"], "tk");
+        });
+    }
+
+    #[test]
+    fn saving_lan_keeps_a_legacy_api_key_readable() {
+        with_temp_home("cred_legacy_plus_lan", |home| {
+            let dir = home.join(".linkly");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("credentials.json"), r#"{"apiKey":"lkai_legacy"}"#).unwrap();
+
+            save_lan_credentials("http://192.168.1.9:60606", "tk").unwrap();
+            assert_eq!(
+                read_credentials_api_key().unwrap().as_deref(),
+                Some("lkai_legacy")
+            );
+            assert!(read_lan_credentials().unwrap().is_some());
+        });
+    }
+
+    #[test]
+    fn saving_over_a_corrupted_file_starts_fresh() {
+        with_temp_home("cred_corrupt_overwrite", |home| {
+            let dir = home.join(".linkly");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("credentials.json"), "not json").unwrap();
+
+            save_credentials_api_key("lkai_fixed").unwrap();
+            assert_eq!(
+                read_credentials_api_key().unwrap().as_deref(),
+                Some("lkai_fixed")
+            );
+        });
+    }
+
+    #[test]
+    fn deleting_from_a_corrupted_file_removes_it() {
+        with_temp_home("cred_corrupt_delete", |home| {
+            let dir = home.join(".linkly");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("credentials.json"), "not json").unwrap();
+
+            assert!(delete_remote_credentials().unwrap());
+            assert!(!dir.join("credentials.json").exists());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credentials_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        with_temp_home("cred_mode", |home| {
+            let path = home.join(".linkly").join("credentials.json");
+            save_credentials_api_key("lkai_x").unwrap();
+            // Replacing an existing file must not loosen the mode either.
+            save_lan_credentials("http://192.168.1.9:60606", "tk").unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+            // No temp files left behind next to it.
+            let entries: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().collect();
+            assert_eq!(entries.len(), 1);
         });
     }
 
@@ -666,6 +988,29 @@ mod tests {
     }
 
     #[test]
+    fn clap_accepts_lan_alone() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from(["linkly", "search", "test", "--lan"]);
+        assert!(cli.is_ok(), "--lan should be accepted on its own");
+    }
+
+    #[test]
+    fn clap_rejects_lan_with_other_targets() {
+        use clap::Parser;
+        for extra in [
+            &["--remote"][..],
+            &["--endpoint", "http://x", "--token", "tk"][..],
+        ] {
+            let mut args = vec!["linkly", "search", "test", "--lan"];
+            args.extend_from_slice(extra);
+            assert!(
+                crate::cli::Cli::try_parse_from(args).is_err(),
+                "--lan must conflict with {extra:?}"
+            );
+        }
+    }
+
+    #[test]
     fn client_name_keeps_the_names_agents_actually_pass() {
         for name in [
             "claude-code",
@@ -730,6 +1075,7 @@ mod tests {
             Some("http://192.168.1.9:60606/mcp"),
             Some("tk"),
             false,
+            false,
             Some("claude-code"),
         )
         .expect("LAN mode resolves from args alone");
@@ -738,6 +1084,7 @@ mod tests {
         let conn = resolve(
             Some("http://192.168.1.9:60606/mcp"),
             Some("tk"),
+            false,
             false,
             Some("思源笔记"),
         )

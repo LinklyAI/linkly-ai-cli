@@ -72,7 +72,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         if status_code == 401 {
             anyhow::bail!(
                 "Authentication failed (401){}\n\
-                 For LAN access: use --endpoint <url> --token <token>\n\
+                 For LAN access: run `linkly auth set-key <token> --lan --endpoint <url>`, then use --lan\n\
                  For remote access: run `linkly auth set-key <api-key>`",
                 if body_trimmed.is_empty() {
                     String::new()
@@ -99,6 +99,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     }
 
     let health: HealthResponse = resp.json().await?;
+    let mcp_endpoint = displayed_mcp_endpoint(conn, health.mcp_endpoint.as_deref());
     let version_gap = version_check::check_desktop_version(&health.version).err();
 
     if json_mode {
@@ -116,7 +117,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             "status": envelope_status,
             "cli_version": env!("CARGO_PKG_VERSION"),
             "app_version": health.version,
-            "mcp_endpoint": health.mcp_endpoint,
+            "mcp_endpoint": mcp_endpoint,
             "doc_count": health.doc_count,
             "index_status": health.index_status,
             "agent_skill": skill_json(&skill_check.await.unwrap_or_default()),
@@ -160,7 +161,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
         println!(
             "  {}  {}",
             "MCP:".dimmed(),
-            health.mcp_endpoint.as_deref().unwrap_or("not running")
+            mcp_endpoint.as_deref().unwrap_or("not running")
         );
         println!(
             "  {} {} indexed",
@@ -263,6 +264,21 @@ fn skill_json(state: &SkillState) -> serde_json::Value {
         "path": path.map(|p| p.display().to_string()),
         "legacy_path": path.map(|p| is_legacy(p)).unwrap_or(false),
     })
+}
+
+/// The MCP endpoint to show the user.
+///
+/// Desktop reports the URL it serves on from its own point of view, which is
+/// always loopback (`http://127.0.0.1:60606/mcp`). That is right for a local
+/// connection, but over the LAN it names the wrong machine — the address this
+/// CLI actually reached is the useful one. `None` from Desktop still means its
+/// MCP server is off, whichever way we got here.
+fn displayed_mcp_endpoint(conn: &ConnectionInfo, reported: Option<&str>) -> Option<String> {
+    let reported = reported?;
+    match conn.mode {
+        ConnectionMode::Lan { .. } => Some(conn.mcp_url.clone()),
+        _ => Some(reported.to_string()),
+    }
 }
 
 fn unreachable_message(conn: &ConnectionInfo) -> String {
@@ -405,5 +421,47 @@ fn format_number(n: u64) -> String {
         format!("{},{:03}", n / 1_000, n % 1_000)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conn(mode: ConnectionMode, mcp_url: &str) -> ConnectionInfo {
+        ConnectionInfo {
+            mcp_url: mcp_url.to_string(),
+            base_url: mcp_url.trim_end_matches("/mcp").to_string(),
+            auth_header: None,
+            is_remote: false,
+            mode,
+            client_name: None,
+        }
+    }
+
+    #[test]
+    fn lan_shows_the_address_actually_reached() {
+        let lan = conn(
+            ConnectionMode::Lan {
+                endpoint: "http://192.168.1.5:60606".to_string(),
+                saved: true,
+            },
+            "http://192.168.1.5:60606/mcp",
+        );
+        assert_eq!(
+            displayed_mcp_endpoint(&lan, Some("http://127.0.0.1:60606/mcp")).as_deref(),
+            Some("http://192.168.1.5:60606/mcp")
+        );
+        // Desktop saying its MCP server is off still wins.
+        assert_eq!(displayed_mcp_endpoint(&lan, None), None);
+    }
+
+    #[test]
+    fn local_keeps_what_desktop_reports() {
+        let local = conn(ConnectionMode::Local, "http://127.0.0.1:60606/mcp");
+        assert_eq!(
+            displayed_mcp_endpoint(&local, Some("http://127.0.0.1:60606/mcp")).as_deref(),
+            Some("http://127.0.0.1:60606/mcp")
+        );
     }
 }
