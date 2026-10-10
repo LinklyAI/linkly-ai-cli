@@ -335,6 +335,16 @@ linkly auth logout          # remove the remote API key (same as --remote)
 linkly auth logout --lan    # remove the LAN connection
 ```
 
+Set `LINKLY_CONFIG_DIR` to keep credentials somewhere other than `~/.linkly` — for
+example one directory per user when an agent serves several people from the same
+system account. Each directory holds one account. Discovery of the local desktop app
+(`~/.linkly/port`) is not affected.
+
+```bash
+LINKLY_CONFIG_DIR=~/.linkly-alice linkly auth set-key lkai_xxx
+LINKLY_CONFIG_DIR=~/.linkly-alice linkly search "notes" --remote
+```
+
 ## Options
 
 Connection options (`--lan`, `--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `mcp` accepts only `--remote`. `--json` and `--client` are available on all commands.

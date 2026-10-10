@@ -5,7 +5,7 @@ use serde::Deserialize;
 const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
 const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
 
-/// Credentials file path: ~/.linkly/credentials.json
+/// Credentials file path: <config dir>/credentials.json (see `config_dir`)
 /// New format: { "remotes": [{ "name": "default", "key": "lkai_xxx" }],
 ///               "lan": { "endpoint": "http://192.168.1.100:60606", "token": "..." } }
 /// Legacy format (still readable): { "apiKey": "lkai_xxx" }
@@ -439,16 +439,31 @@ fn is_loopback(host: &str) -> bool {
     host == "localhost" || host == "::1" || host.starts_with("127.")
 }
 
-/// Absolute path of the credentials file (`~/.linkly/credentials.json`).
+/// Environment variable that relocates the CLI's own state (credentials and
+/// the pending browser login). One directory holds one account, so an agent
+/// serving several users gives each of them their own directory.
+///
+/// It deliberately does **not** move `~/.linkly/port`: that file is written by
+/// the Desktop app, and local discovery must keep finding it.
+pub const CONFIG_DIR_ENV: &str = "LINKLY_CONFIG_DIR";
+
+/// Directory holding credentials.json: `$LINKLY_CONFIG_DIR`, or `~/.linkly`.
+pub fn config_dir() -> Result<std::path::PathBuf> {
+    match std::env::var_os(CONFIG_DIR_ENV) {
+        Some(dir) if !dir.is_empty() => Ok(std::path::PathBuf::from(dir)),
+        _ => Ok(dirs::home_dir()
+            .context("Cannot determine home directory")?
+            .join(".linkly")),
+    }
+}
+
+/// Absolute path of the credentials file (`<config dir>/credentials.json`).
 ///
 /// Single source of truth so read / write / delete can never disagree about
 /// where the file lives — and so `auth status` can show the user the real path
 /// instead of a hardcoded string.
 pub fn credentials_path() -> Result<std::path::PathBuf> {
-    Ok(dirs::home_dir()
-        .context("Cannot determine home directory")?
-        .join(".linkly")
-        .join(CREDENTIALS_FILE))
+    Ok(config_dir()?.join(CREDENTIALS_FILE))
 }
 
 /// Fields holding the remote API key: the current `remotes` array and the
@@ -775,6 +790,39 @@ mod tests {
                 info.mode,
                 ConnectionMode::Lan { saved: false, .. }
             ));
+        });
+    }
+
+    // ── LINKLY_CONFIG_DIR ────────────────────────────────
+
+    #[test]
+    fn config_dir_env_relocates_credentials_but_not_the_port_file() {
+        with_temp_home("config_dir_env", |home| {
+            let custom = home.join("tenant-a");
+            std::env::set_var(CONFIG_DIR_ENV, &custom);
+            save_credentials_api_key("lkai_tenant_a").unwrap();
+            let in_custom = custom.join("credentials.json").exists();
+            let in_default = home.join(".linkly").join("credentials.json").exists();
+
+            // Local discovery still reads ~/.linkly/port.
+            std::fs::create_dir_all(home.join(".linkly")).unwrap();
+            std::fs::write(home.join(".linkly").join("port"), r#"{"port": 60606}"#).unwrap();
+            let local = resolve(None, None, false, false, None);
+
+            std::env::remove_var(CONFIG_DIR_ENV);
+            assert!(in_custom, "credentials must land in $LINKLY_CONFIG_DIR");
+            assert!(!in_default, "the default directory must stay untouched");
+            assert_eq!(local.unwrap().base_url, "http://127.0.0.1:60606");
+        });
+    }
+
+    #[test]
+    fn empty_config_dir_env_falls_back_to_home() {
+        with_temp_home("config_dir_empty", |home| {
+            std::env::set_var(CONFIG_DIR_ENV, "");
+            let dir = config_dir().unwrap();
+            std::env::remove_var(CONFIG_DIR_ENV);
+            assert_eq!(dir, home.join(".linkly"));
         });
     }
 
