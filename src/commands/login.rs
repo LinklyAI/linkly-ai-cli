@@ -25,15 +25,17 @@ use crate::commands::auth::mask_key;
 use crate::connection::{
     config_dir, credentials_path, read_credentials_api_key, save_login_api_key, REMOTE_BASE_URL,
 };
-use crate::constants::web_base_url;
+use crate::constants::{is_acceptable_web_base, web_base_url};
 
 const PENDING_FILE: &str = "pending-login.json";
 /// Default limit for one `--wait`; the plain interactive login waits until
 /// the link expires instead.
 pub const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 300;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-/// Consecutive network failures tolerated while polling before giving up.
-const MAX_NETWORK_FAILURES: u32 = 3;
+/// Consecutive failed polls tolerated before giving up.
+const MAX_NETWORK_FAILURES: u32 = 5;
+/// Upper bound on the poll interval, whatever the server says.
+const MAX_POLL_INTERVAL_SECS: u64 = 60;
 
 /// How `login` was invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,19 +156,19 @@ async fn execute(opts: &LoginOptions) -> Result<()> {
             remove_pending(&pending_path)?;
             return Err(expired());
         }
+        // A key saved in the meantime (e.g. `set-key`) must not be silently
+        // replaced. After a failed save nothing is stored, so re-collecting
+        // the same key still works.
+        if read_credentials_api_key()?.is_some() {
+            remove_pending(&pending_path)?;
+            return Err(already_logged_in()?);
+        }
         let timeout = opts.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_SECS);
         return wait_for_approval(pending, &pending_path, timeout, opts.json).await;
     }
 
     if read_credentials_api_key()?.is_some() {
-        return Err(fail(
-            LoginErrorCode::AlreadyLoggedIn,
-            format!(
-                "Already logged in ({}). Run `linkly auth logout` first, or set LINKLY_CONFIG_DIR \
-                 to sign in another account in a separate directory.",
-                credentials_path()?.display()
-            ),
-        ));
+        return Err(already_logged_in()?);
     }
 
     let existing = load_pending(&pending_path)?;
@@ -215,6 +217,9 @@ async fn execute(opts: &LoginOptions) -> Result<()> {
             Ok(())
         }
         _ => {
+            // The link was validated in start_login (https/loopback website,
+            // no whitespace or control characters), so it can't be read as an
+            // option or a second command by the launcher.
             let opened = !opts.no_browser && can_open_browser() && open_browser(&pending.url);
             // In JSON mode stdout carries exactly one object (the result), so
             // the link goes to stderr where a person still sees it.
@@ -230,6 +235,17 @@ async fn execute(opts: &LoginOptions) -> Result<()> {
             wait_for_approval(pending, &pending_path, timeout, opts.json).await
         }
     }
+}
+
+fn already_logged_in() -> Result<anyhow::Error> {
+    Ok(fail(
+        LoginErrorCode::AlreadyLoggedIn,
+        format!(
+            "Already logged in ({}). Run `linkly auth logout` first, or set LINKLY_CONFIG_DIR \
+             to sign in another account in a separate directory.",
+            credentials_path()?.display()
+        ),
+    ))
 }
 
 fn print_link(out: &mut dyn Write, pending: &PendingLogin, opened: bool) {
@@ -264,8 +280,21 @@ fn http_client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?)
 }
 
+/// Keep a server-supplied poll interval within sane bounds.
+fn clamp_interval(secs: u64) -> u64 {
+    secs.clamp(1, MAX_POLL_INTERVAL_SECS)
+}
+
+/// Whether `url` is safe to show and hand to a browser launcher: on the
+/// website we started the login with, and free of whitespace or control
+/// characters a shell or launcher could misread.
+fn is_login_link(url: &str, web_base: &str) -> bool {
+    url.starts_with(&format!("{}/", web_base))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 async fn start_login() -> Result<PendingLogin> {
-    let web_base = web_base_url();
+    let web_base = web_base_url()?;
     let body = serde_json::json!({
         "client_type": "cli",
         "client_info": {
@@ -300,18 +329,22 @@ async fn start_login() -> Result<PendingLogin> {
         .json()
         .await
         .map_err(|_| network("unexpected response".to_string()))?;
+    if !is_login_link(&started.verification_uri_complete, &web_base) {
+        return Err(network(
+            "the server returned an unexpected link".to_string(),
+        ));
+    }
     Ok(PendingLogin {
         device_code: started.device_code,
         user_code: started.user_code,
         url: started.verification_uri_complete,
-        expires_at: unix_now() + started.expires_in,
-        interval: started.interval.max(1),
+        expires_at: unix_now().saturating_add(started.expires_in),
+        interval: clamp_interval(started.interval),
         web_base,
     })
 }
 
-/// One poll's answer. Unknown statuses are treated like `pending` by the
-/// caller only if they carry an interval; otherwise they surface as errors.
+/// One poll's answer.
 #[derive(Deserialize)]
 struct PollResponse {
     status: String,
@@ -319,6 +352,7 @@ struct PollResponse {
     api_key: Option<String>,
 }
 
+#[derive(Debug)]
 enum PollOutcome {
     Pending { interval: Option<u64> },
     SlowDown { interval: Option<u64> },
@@ -327,85 +361,144 @@ enum PollOutcome {
     Gone,
 }
 
-async fn poll_once(pending: &PendingLogin) -> std::result::Result<PollOutcome, String> {
-    let resp = http_client()
-        .map_err(|e| e.to_string())?
-        .post(format!("{}/api/cli/auth/poll", pending.web_base))
-        .json(&serde_json::json!({ "device_code": pending.device_code }))
-        .send()
-        .await
-        .map_err(|e| e.without_url().to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+/// A poll that produced no answer. `transient` marks 429 / 5xx, where the
+/// server asked us to back off rather than being unreachable.
+#[derive(Debug)]
+struct PollFailure {
+    transient: bool,
+    detail: String,
+}
+
+/// One poll of a pending login. A trait so the wait loop can be tested
+/// without a server.
+trait Poller {
+    async fn poll(&self, pending: &PendingLogin) -> std::result::Result<PollOutcome, PollFailure>;
+}
+
+/// The real poller; one HTTP client (and connection) for the whole wait.
+struct HttpPoller {
+    client: reqwest::Client,
+}
+
+impl Poller for HttpPoller {
+    async fn poll(&self, pending: &PendingLogin) -> std::result::Result<PollOutcome, PollFailure> {
+        let failure = |transient: bool, detail: String| PollFailure { transient, detail };
+        let resp = self
+            .client
+            .post(format!("{}/api/cli/auth/poll", pending.web_base))
+            .json(&serde_json::json!({ "device_code": pending.device_code }))
+            .send()
+            .await
+            .map_err(|e| failure(false, e.without_url().to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let transient = status.as_u16() == 429 || status.is_server_error();
+            return Err(failure(transient, format!("HTTP {}", status.as_u16())));
+        }
+        let body: PollResponse = resp
+            .json()
+            .await
+            .map_err(|_| failure(false, "unexpected response".to_string()))?;
+        Ok(match body.status.as_str() {
+            "pending" => PollOutcome::Pending {
+                interval: body.interval,
+            },
+            "slow_down" => PollOutcome::SlowDown {
+                interval: body.interval,
+            },
+            "approved" => match body.api_key {
+                Some(api_key) => PollOutcome::Approved { api_key },
+                None => return Err(failure(false, "approved without a key".to_string())),
+            },
+            "denied" => PollOutcome::Denied,
+            "expired" | "invalid" => PollOutcome::Gone,
+            other => return Err(failure(false, format!("unknown status '{}'", other))),
+        })
     }
-    let body: PollResponse = resp
-        .json()
-        .await
-        .map_err(|_| "unexpected response".to_string())?;
-    Ok(match body.status.as_str() {
-        "pending" => PollOutcome::Pending {
-            interval: body.interval,
-        },
-        "slow_down" => PollOutcome::SlowDown {
-            interval: body.interval,
-        },
-        "approved" => match body.api_key {
-            Some(api_key) => PollOutcome::Approved { api_key },
-            None => return Err("approved without a key".to_string()),
-        },
-        "denied" => PollOutcome::Denied,
-        "expired" | "invalid" => PollOutcome::Gone,
-        other => return Err(format!("unknown status '{}'", other)),
-    })
+}
+
+/// Time source for the wait loop: milliseconds since an arbitrary start.
+/// A trait so tests can run a ten-minute wait instantly.
+trait Clock {
+    fn now_ms(&self) -> u64;
+    async fn sleep_until_ms(&self, deadline_ms: u64);
+}
+
+struct RealClock {
+    start: std::time::Instant,
+}
+
+impl Clock for RealClock {
+    fn now_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+
+    async fn sleep_until_ms(&self, deadline_ms: u64) {
+        let now = self.now_ms();
+        if deadline_ms > now {
+            tokio::time::sleep(Duration::from_millis(deadline_ms - now)).await;
+        }
+    }
 }
 
 // ─── waiting ────────────────────────────────────────────────────
 
 async fn wait_for_approval(
-    mut pending: PendingLogin,
+    pending: PendingLogin,
     pending_path: &Path,
     timeout_secs: u64,
     json: bool,
 ) -> Result<()> {
-    let wait_deadline = unix_now().saturating_add(timeout_secs);
-    let mut network_failures = 0;
+    let poller = HttpPoller {
+        client: http_client()?,
+    };
+    let clock = RealClock {
+        start: std::time::Instant::now(),
+    };
+    let api_key = wait_loop(&poller, &clock, pending.clone(), pending_path, timeout_secs).await?;
+    finish(&api_key, pending_path, &pending, json).await
+}
+
+/// Poll until the login resolves, the link expires, or this wait's
+/// `timeout_secs` runs out; returns the issued key.
+///
+/// Polls once right away (`--wait` usually runs after the user approved),
+/// then every `interval`. When the next regular poll would land past the end
+/// of this wait — or past the link's last second — it sleeps only that far
+/// and polls one final time, so an approval at the very end is not missed.
+async fn wait_loop<P: Poller, C: Clock>(
+    poller: &P,
+    clock: &C,
+    mut pending: PendingLogin,
+    pending_path: &Path,
+    timeout_secs: u64,
+) -> Result<String> {
+    let start = clock.now_ms();
+    let expiry = start + pending.expires_at.saturating_sub(unix_now()) * 1000;
+    // The server refuses polls at or after expiry, so the last useful poll
+    // happens a second before it.
+    let last_chance = expiry.saturating_sub(1000).max(start);
+    let deadline = start.saturating_add(timeout_secs.saturating_mul(1000));
+    let mut failures = 0;
 
     loop {
-        let now = unix_now();
-        if now >= pending.expires_at {
-            remove_pending(pending_path)?;
-            return Err(expired());
-        }
-        // Not enough time left in this wait for another properly spaced
-        // poll: stop here rather than poll early and earn a slow_down.
-        if now.saturating_add(pending.interval) > wait_deadline {
-            tokio::time::sleep(Duration::from_secs(wait_deadline.saturating_sub(now))).await;
-            return Err(fail(
-                LoginErrorCode::Timeout,
-                format!(
-                    "Not authorized yet. Run `linkly auth login --wait` again; the link is valid for {} more seconds.",
-                    pending.expires_at.saturating_sub(unix_now())
-                ),
-            ));
-        }
-        tokio::time::sleep(Duration::from_secs(pending.interval)).await;
-
-        match poll_once(&pending).await {
+        match poller.poll(&pending).await {
             Ok(PollOutcome::Pending { interval }) => {
-                network_failures = 0;
+                failures = 0;
                 if let Some(interval) = interval {
-                    pending.interval = interval.max(1);
+                    pending.interval = clamp_interval(interval);
                 }
             }
             Ok(PollOutcome::SlowDown { interval }) => {
-                network_failures = 0;
-                pending.interval = interval.unwrap_or(pending.interval + 5).max(1);
-                // Remembered so the next `--wait` starts at the slower pace.
-                let _ = write_pending(pending_path, &pending, false);
+                failures = 0;
+                pending.interval = clamp_interval(interval.unwrap_or(pending.interval + 5));
+                // Remembered so the next `--wait` starts at the slower pace —
+                // unless another process already finished and removed it.
+                if pending_path.exists() {
+                    let _ = write_pending(pending_path, &pending, false);
+                }
             }
-            Ok(PollOutcome::Approved { api_key }) => {
-                return finish(&api_key, pending_path, &pending, json).await;
-            }
+            Ok(PollOutcome::Approved { api_key }) => return Ok(api_key),
             Ok(PollOutcome::Denied) => {
                 remove_pending(pending_path)?;
                 return Err(fail(
@@ -417,19 +510,41 @@ async fn wait_for_approval(
                 remove_pending(pending_path)?;
                 return Err(expired());
             }
-            Err(detail) => {
-                network_failures += 1;
-                if network_failures >= MAX_NETWORK_FAILURES {
+            Err(failure) => {
+                failures += 1;
+                if failure.transient {
+                    pending.interval = clamp_interval(pending.interval + 5);
+                }
+                if failures >= MAX_NETWORK_FAILURES {
                     return Err(fail(
                         LoginErrorCode::Network,
                         format!(
                             "Could not reach {}: {}. The login is still pending; run `linkly auth login --wait` to keep waiting.",
-                            pending.web_base, detail
+                            pending.web_base, failure.detail
                         ),
                     ));
                 }
             }
         }
+
+        let now = clock.now_ms();
+        if now >= last_chance {
+            remove_pending(pending_path)?;
+            return Err(expired());
+        }
+        if now >= deadline {
+            return Err(fail(
+                LoginErrorCode::Timeout,
+                format!(
+                    "Not authorized yet. Run `linkly auth login --wait` again; the link is valid for {} more seconds.",
+                    pending.expires_at.saturating_sub(unix_now())
+                ),
+            ));
+        }
+        let wake = (now + pending.interval * 1000)
+            .min(deadline)
+            .min(last_chance);
+        clock.sleep_until_ms(wake).await;
     }
 }
 
@@ -457,7 +572,11 @@ async fn finish(
             pending.expires_at.saturating_sub(unix_now())
         )
     })?;
-    remove_pending(pending_path)?;
+    // The login itself succeeded; a leftover pending file only means the next
+    // `login` reports login_in_progress until the link expires.
+    if let Err(e) = remove_pending(pending_path) {
+        eprintln!("Warning: {:#}", e);
+    }
 
     let account = validate_key(api_key).await;
     let preview = mask_key(api_key);
@@ -555,8 +674,8 @@ fn display_plan(plan: &str) -> String {
 // ─── pending file ───────────────────────────────────────────────
 
 /// The pending login (possibly expired — callers decide), or `None` when there
-/// is none. An unreadable file is removed and treated as absent: it can never
-/// be completed anyway.
+/// is none. An unreadable file — or one pointing at a website we would not
+/// start a login with — is removed and treated as absent.
 fn load_pending(path: &Path) -> Result<Option<PendingLogin>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -564,8 +683,13 @@ fn load_pending(path: &Path) -> Result<Option<PendingLogin>> {
         Err(e) => return Err(anyhow::anyhow!("Failed to read {}: {}", path.display(), e)),
     };
     match serde_json::from_str::<PendingLogin>(&text) {
-        Ok(pending) => Ok(Some(pending)),
-        Err(_) => {
+        Ok(pending)
+            if is_acceptable_web_base(&pending.web_base)
+                && is_login_link(&pending.url, &pending.web_base) =>
+        {
+            Ok(Some(pending))
+        }
+        _ => {
             remove_pending(path)?;
             Ok(None)
         }
@@ -637,6 +761,15 @@ fn unix_now() -> u64 {
 /// Best-effort machine name, shown on the approval page and in the key name.
 /// The website sanitizes it; an empty value is fine.
 fn hostname() -> String {
+    // On Windows `hostname.exe` prints in the OEM code page; the environment
+    // variable is already Unicode.
+    if cfg!(windows) {
+        if let Ok(name) = std::env::var("COMPUTERNAME") {
+            if !name.trim().is_empty() {
+                return name;
+            }
+        }
+    }
     let from_cmd = std::process::Command::new("hostname")
         .output()
         .ok()
@@ -674,9 +807,10 @@ fn open_browser(url: &str) -> bool {
             c
         }
         "windows" => {
-            // `start` is a cmd builtin; the empty string is the window title.
-            let mut c = std::process::Command::new("cmd");
-            c.args(["/C", "start", "", url]);
+            // Not `cmd /C start`: cmd would parse `&`, `^` and `%` in the URL.
+            // The URL protocol handler takes it as a single argument.
+            let mut c = std::process::Command::new("rundll32");
+            c.args(["url.dll,FileProtocolHandler", url]);
             c
         }
         _ => {
@@ -834,6 +968,214 @@ mod tests {
             let path = pending_path();
             std::env::remove_var(CONFIG_DIR_ENV);
             assert_eq!(path, custom.join(PENDING_FILE));
+        });
+    }
+
+    // ─── wait loop ───────────────────────────────────────────
+
+    use std::cell::{Cell, RefCell};
+
+    /// Virtual time: sleeping just moves the clock.
+    struct FakeClock(Cell<u64>);
+
+    impl Clock for FakeClock {
+        fn now_ms(&self) -> u64 {
+            self.0.get()
+        }
+        async fn sleep_until_ms(&self, deadline_ms: u64) {
+            if deadline_ms > self.0.get() {
+                self.0.set(deadline_ms);
+            }
+        }
+    }
+
+    /// Answers each poll with `respond(poll_time_ms)`, recording the times.
+    struct FakePoller<'a, F: Fn(u64) -> std::result::Result<PollOutcome, PollFailure>> {
+        clock: &'a FakeClock,
+        respond: F,
+        polls: RefCell<Vec<u64>>,
+    }
+
+    impl<F: Fn(u64) -> std::result::Result<PollOutcome, PollFailure>> Poller for FakePoller<'_, F> {
+        async fn poll(&self, _: &PendingLogin) -> std::result::Result<PollOutcome, PollFailure> {
+            let now = self.clock.now_ms();
+            self.polls.borrow_mut().push(now);
+            (self.respond)(now)
+        }
+    }
+
+    fn pending_for(secs_left: u64) -> PendingLogin {
+        sample(unix_now() + secs_left)
+    }
+
+    /// Run the loop with a link valid for `secs_left`, a wait of `timeout`.
+    fn run_wait<F>(secs_left: u64, timeout: u64, respond: F) -> (Result<String>, Vec<u64>)
+    where
+        F: Fn(u64) -> std::result::Result<PollOutcome, PollFailure>,
+    {
+        let clock = FakeClock(Cell::new(0));
+        let poller = FakePoller {
+            clock: &clock,
+            respond,
+            polls: RefCell::new(Vec::new()),
+        };
+        let path = pending_path();
+        let pending = pending_for(secs_left);
+        create_pending(&path, &pending).unwrap();
+        let result = block_on(wait_loop(&poller, &clock, pending, &path, timeout));
+        let polls = poller.polls.into_inner();
+        (result, polls)
+    }
+
+    fn pending_outcome() -> std::result::Result<PollOutcome, PollFailure> {
+        Ok(PollOutcome::Pending { interval: Some(5) })
+    }
+
+    #[test]
+    fn polls_immediately_then_every_interval() {
+        with_temp_home("wait_spacing", |_home| {
+            let (result, polls) = run_wait(600, 12, |_| pending_outcome());
+            assert_eq!(code_of(result.map(|_| ())), LoginErrorCode::Timeout);
+            // 0, 5, 10, then a final poll at the 12 s deadline.
+            assert_eq!(polls, vec![0, 5_000, 10_000, 12_000]);
+            assert!(pending_path().exists(), "a timeout keeps the login");
+        });
+    }
+
+    #[test]
+    fn short_or_zero_timeout_still_checks_once() {
+        with_temp_home("wait_zero_timeout", |_home| {
+            let (result, polls) = run_wait(600, 0, |_| {
+                Ok(PollOutcome::Approved {
+                    api_key: "lkai_x".to_string(),
+                })
+            });
+            assert_eq!(result.unwrap(), "lkai_x");
+            assert_eq!(polls, vec![0]);
+        });
+    }
+
+    #[test]
+    fn waiting_until_expiry_ends_expired_after_a_last_poll() {
+        with_temp_home("wait_until_expiry", |_home| {
+            // Plain `login`: the wait lasts as long as the link (here 12 s).
+            let (result, polls) = run_wait(12, 12, |_| pending_outcome());
+            assert_eq!(code_of(result.map(|_| ())), LoginErrorCode::Expired);
+            // Last poll one second before expiry, not skipped.
+            assert_eq!(polls.last().copied(), Some(11_000));
+            assert!(!pending_path().exists(), "an expired login is cleaned up");
+        });
+    }
+
+    #[test]
+    fn approval_in_the_final_seconds_is_collected() {
+        with_temp_home("wait_last_second", |_home| {
+            let (result, _) = run_wait(12, 12, |now| {
+                if now >= 11_000 {
+                    Ok(PollOutcome::Approved {
+                        api_key: "lkai_late".to_string(),
+                    })
+                } else {
+                    pending_outcome()
+                }
+            });
+            assert_eq!(result.unwrap(), "lkai_late");
+        });
+    }
+
+    #[test]
+    fn slow_down_raises_and_persists_the_interval() {
+        with_temp_home("wait_slow_down", |_home| {
+            let (_, polls) = run_wait(600, 30, |now| {
+                if now == 0 {
+                    Ok(PollOutcome::SlowDown { interval: Some(10) })
+                } else {
+                    pending_outcome()
+                }
+            });
+            assert_eq!(polls[1], 10_000);
+            assert_eq!(load_pending(&pending_path()).unwrap().unwrap().interval, 10);
+        });
+    }
+
+    #[test]
+    fn hostile_interval_is_capped() {
+        with_temp_home("wait_interval_cap", |_home| {
+            let (_, polls) = run_wait(600, 130, |_| {
+                Ok(PollOutcome::Pending {
+                    interval: Some(u64::MAX),
+                })
+            });
+            assert_eq!(&polls[..3], &[0, 60_000, 120_000]);
+        });
+    }
+
+    #[test]
+    fn denied_and_gone_end_the_login() {
+        with_temp_home("wait_denied", |_home| {
+            let (result, _) = run_wait(600, 30, |_| Ok(PollOutcome::Denied));
+            assert_eq!(code_of(result.map(|_| ())), LoginErrorCode::Denied);
+            assert!(!pending_path().exists());
+
+            let (result, _) = run_wait(600, 30, |_| Ok(PollOutcome::Gone));
+            assert_eq!(code_of(result.map(|_| ())), LoginErrorCode::Expired);
+            assert!(!pending_path().exists());
+        });
+    }
+
+    #[test]
+    fn repeated_failures_give_up_with_network_and_keep_the_login() {
+        with_temp_home("wait_network", |_home| {
+            let (result, polls) = run_wait(600, 600, |_| {
+                Err(PollFailure {
+                    transient: true,
+                    detail: "HTTP 503".to_string(),
+                })
+            });
+            let err = result.unwrap_err().downcast::<LoginError>().unwrap();
+            assert_eq!(err.code, LoginErrorCode::Network);
+            assert!(err.message.contains("--wait"));
+            assert_eq!(polls.len() as u32, MAX_NETWORK_FAILURES);
+            // 429/5xx back off: the gaps grow.
+            assert!(polls[2] - polls[1] > polls[1] - polls[0]);
+            assert!(pending_path().exists());
+        });
+    }
+
+    #[test]
+    fn links_must_stay_on_the_login_website() {
+        assert!(is_login_link(
+            "https://linkly.ai/cli/auth?code=ABCD-EFGH",
+            "https://linkly.ai"
+        ));
+        assert!(!is_login_link(
+            "https://evil.example/cli/auth",
+            "https://linkly.ai"
+        ));
+        assert!(!is_login_link(
+            "https://linkly.ai.evil.example/x",
+            "https://linkly.ai"
+        ));
+        assert!(!is_login_link(
+            "https://linkly.ai/x & calc",
+            "https://linkly.ai"
+        ));
+        assert!(!is_login_link(
+            "https://linkly.ai/x\nfoo",
+            "https://linkly.ai"
+        ));
+    }
+
+    #[test]
+    fn wait_refuses_to_replace_a_key_saved_meanwhile() {
+        with_temp_home("login_wait_after_set_key", |_home| {
+            create_pending(&pending_path(), &sample(unix_now() + 600)).unwrap();
+            save_credentials_api_key("lkai_0123456789abcdef0123456789abcdef").unwrap();
+            assert_eq!(
+                code_of(block_on(execute(&opts(LoginMode::WaitOnly)))),
+                LoginErrorCode::AlreadyLoggedIn
+            );
+            assert!(!pending_path().exists());
         });
     }
 

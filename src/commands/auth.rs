@@ -208,9 +208,8 @@ fn lan_summary(lan: Option<&LanCredentials>) -> String {
 pub async fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
     let revocation = match target {
         CredentialTarget::Remote => match remote_key_to_revoke() {
-            Ok(Some(key)) => Some(revoke_login_key(&key).await),
-            Ok(None) => None,
-            Err(e) => return output::print_error(&e.to_string(), json_mode),
+            Some(key) => Some(revoke_login_key(&key).await),
+            None => None,
         },
         CredentialTarget::Lan => None,
     };
@@ -232,7 +231,11 @@ pub async fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
             serde_json::json!({ "status": "success", "removed": removed, "target": target_name });
         if target == CredentialTarget::Remote && removed {
             match &revocation {
-                Some(Ok(())) => obj["remote_revoked"] = serde_json::json!(true),
+                Some(Ok(Revocation::Revoked)) => obj["remote_revoked"] = serde_json::json!(true),
+                Some(Ok(Revocation::AlreadyInactive)) => {
+                    obj["remote_revoked"] = serde_json::json!(false);
+                    obj["revoke_note"] = serde_json::json!("already_inactive");
+                }
                 Some(Err(reason)) => {
                     obj["remote_revoked"] = serde_json::json!(false);
                     obj["revoke_error"] = serde_json::json!(reason);
@@ -249,9 +252,12 @@ pub async fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
         (CredentialTarget::Remote, true) => {
             println!("Credentials removed from {}", path.display());
             match &revocation {
-                Some(Ok(())) => println!(
+                Some(Ok(Revocation::Revoked)) => println!(
                     "The API key was revoked on the server (it stops working within about 90 seconds)."
                 ),
+                Some(Ok(Revocation::AlreadyInactive)) => {
+                    println!("The API key was already inactive on the server.")
+                }
                 Some(Err(reason)) => println!(
                     "Logged out locally, but the remote key was not confirmed revoked ({}).\n\
                      Revoke it at {} if you no longer need it.",
@@ -278,30 +284,40 @@ pub async fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
 }
 
 /// The stored remote key, if `auth login` issued it.
-fn remote_key_to_revoke() -> Result<Option<String>> {
-    if read_remote_key_source()?.as_deref() != Some(LOGIN_KEY_SOURCE) {
-        return Ok(None);
+///
+/// An unreadable or corrupted file yields `None`: there is nothing we could
+/// revoke, and logout must still be able to delete the file.
+fn remote_key_to_revoke() -> Option<String> {
+    if read_remote_key_source().ok()?.as_deref() != Some(LOGIN_KEY_SOURCE) {
+        return None;
     }
-    read_credentials_api_key()
+    read_credentials_api_key().ok()?
+}
+
+/// What the server did with a revocation request.
+enum Revocation {
+    Revoked,
+    /// Unknown, already revoked, or (unexpectedly) not CLI-issued: there is
+    /// nothing left for us to revoke.
+    AlreadyInactive,
 }
 
 /// Ask the website to revoke a login-issued key. `Err` carries a short reason.
-///
-/// A key the server no longer knows (401) or does not consider CLI-issued
-/// (409) counts as done: either way there is nothing left for us to revoke.
-async fn revoke_login_key(key: &str) -> std::result::Result<(), String> {
+async fn revoke_login_key(key: &str) -> std::result::Result<Revocation, String> {
+    let web_base = web_base_url().map_err(|e| e.to_string())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
-        .post(format!("{}/api/cli/auth/revoke", web_base_url()))
+        .post(format!("{}/api/cli/auth/revoke", web_base))
         .bearer_auth(key)
         .send()
         .await
         .map_err(|_| "website unreachable".to_string())?;
     match resp.status().as_u16() {
-        200..=299 | 401 | 409 => Ok(()),
+        200..=299 => Ok(Revocation::Revoked),
+        401 | 409 => Ok(Revocation::AlreadyInactive),
         code => Err(format!("website returned HTTP {}", code)),
     }
 }
@@ -556,6 +572,17 @@ mod tests {
 
             block_on(logout(CredentialTarget::Lan, false)).expect("logout --lan");
             assert!(!home.join(".linkly").join("credentials.json").exists());
+        });
+    }
+
+    #[test]
+    fn logout_clears_a_corrupted_credentials_file() {
+        crate::test_helpers::with_temp_home("auth_logout_corrupt", |home| {
+            let dir = home.join(".linkly");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("credentials.json"), "not json").unwrap();
+            assert!(block_on(logout(CredentialTarget::Remote, false)).is_ok());
+            assert!(!dir.join("credentials.json").exists());
         });
     }
 

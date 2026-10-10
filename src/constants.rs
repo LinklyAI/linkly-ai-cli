@@ -27,9 +27,70 @@ pub const WEB_BASE_URL_ENV: &str = "LINKLY_WEB_URL";
 
 /// The website base URL in effect: `$LINKLY_WEB_URL` (trailing `/` dropped) or
 /// [`WEB_BASE_URL`].
-pub fn web_base_url() -> String {
+///
+/// The login hands an API key over this connection, so an override must be
+/// https — plain http is accepted only for this machine (local development).
+pub fn web_base_url() -> anyhow::Result<String> {
     match std::env::var(WEB_BASE_URL_ENV) {
-        Ok(url) if !url.trim().is_empty() => url.trim().trim_end_matches('/').to_string(),
-        _ => WEB_BASE_URL.to_string(),
+        Ok(url) if !url.trim().is_empty() => {
+            let url = url.trim().trim_end_matches('/').to_string();
+            if is_acceptable_web_base(&url) {
+                Ok(url)
+            } else {
+                anyhow::bail!(
+                    "{} must be an https:// URL (http:// only for localhost), got '{}'. \
+                     Unset it to use {}.",
+                    WEB_BASE_URL_ENV,
+                    url,
+                    WEB_BASE_URL
+                )
+            }
+        }
+        _ => Ok(WEB_BASE_URL.to_string()),
+    }
+}
+
+/// https to anywhere, or http to a loopback host.
+pub fn is_acceptable_web_base(url: &str) -> bool {
+    if let Some(rest) = url.strip_prefix("https://") {
+        return !rest.is_empty();
+    }
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = match authority.rsplit_once(':') {
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => authority,
+    };
+    let host = host.trim_matches(|c| c == '[' || c == ']');
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
+#[cfg(test)]
+mod web_base_tests {
+    use super::is_acceptable_web_base;
+
+    #[test]
+    fn only_https_or_loopback_http_is_accepted() {
+        for ok in [
+            "https://linkly.ai",
+            "https://preview.example.com",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+        ] {
+            assert!(is_acceptable_web_base(ok), "{ok}");
+        }
+        for bad in [
+            "http://192.168.1.5:3000",
+            "http://linkly.ai",
+            "http://localhost.evil.com",
+            "ftp://linkly.ai",
+            "linkly.ai",
+            "https://",
+        ] {
+            assert!(!is_acceptable_web_base(bad), "{bad}");
+        }
     }
 }

@@ -348,7 +348,7 @@ pub enum Command {
         #[arg(long, hide = true, conflicts_with = "remote")]
         endpoint: Option<String>,
 
-        /// Bridge through the cloud gateway (https://mcp.linkly.ai), reaching local and linked cloud libraries. Requires `linkly auth set-key` first.
+        /// Bridge through the cloud gateway (https://mcp.linkly.ai), reaching local and linked cloud libraries. Requires `linkly auth login` (or `linkly auth set-key`) first.
         #[arg(long, conflicts_with = "endpoint")]
         remote: bool,
     },
