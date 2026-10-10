@@ -49,12 +49,35 @@ pub async fn run_from_args(
             client,
         )
         .await;
+        let (mode_name, title) = match &mode {
+            ConnectionMode::Local => ("local", "Local (this machine)"),
+            ConnectionMode::Remote => ("remote", "Remote (--remote)"),
+            ConnectionMode::Lan { saved: true, .. } => ("lan", "LAN (--lan)"),
+            ConnectionMode::Lan { .. } => ("lan", "LAN (--endpoint)"),
+        };
+        let group = Group {
+            mode: mode_name,
+            title,
+            checks: Some(checks),
+            setup_hint: "",
+        };
         if json_mode {
-            println!("{}", checks_json(&checks, &mode));
+            // Same envelope as the flagless run, plus the single-connection
+            // fields this command printed before groups existed, kept at the
+            // top level for existing consumers.
+            let mut obj = groups_json(std::slice::from_ref(&group));
+            if let (Some(map), Some(checks)) = (obj.as_object_mut(), group.checks.as_ref()) {
+                if let serde_json::Value::Object(legacy) = checks_json(checks, &mode) {
+                    for (key, value) in legacy {
+                        map.entry(key).or_insert(value);
+                    }
+                }
+            }
+            println!("{}", obj);
         } else {
-            print_human(&checks);
+            print_groups_human(std::slice::from_ref(&group));
         }
-        if hard_failures(&checks) > 0 {
+        if !group.usable() {
             // Empty message: the printed checks already explained.
             anyhow::bail!("");
         }
@@ -204,7 +227,7 @@ async fn run_all(client: Option<&str>, json_mode: bool) -> Result<()> {
     ];
 
     if json_mode {
-        print_groups_json(&groups);
+        println!("{}", groups_json(&groups));
     } else {
         print_groups_human(&groups);
     }
@@ -633,29 +656,6 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
 
 // ── Output formatters ───────────────────────────────────
 
-fn print_human(checks: &[Check]) {
-    println!("{}", "Linkly AI Doctor".bold());
-    println!();
-    print_checks(checks);
-
-    let issues = checks.iter().filter(|c| !c.ok).count();
-    println!();
-    if issues == 0 {
-        println!("  {}", "All checks passed.".green());
-    } else {
-        println!(
-            "  {}",
-            format!(
-                "{} issue{} found.",
-                issues,
-                if issues == 1 { "" } else { "s" }
-            )
-            .red()
-        );
-        println!("  Still stuck? Ask the community: {}", COMMUNITY_URL);
-    }
-}
-
 /// The check lines of one connection, followed by advice for failed ones.
 fn print_checks(checks: &[Check]) {
     let max_name_len = checks.iter().map(|c| c.name.len()).max().unwrap_or(0);
@@ -719,7 +719,7 @@ fn print_groups_human(groups: &[Group]) {
     }
 }
 
-fn print_groups_json(groups: &[Group]) {
+fn groups_json(groups: &[Group]) -> serde_json::Value {
     let usable = groups.iter().filter(|g| g.usable()).count();
     let clean = groups
         .iter()
@@ -748,10 +748,7 @@ fn print_groups_json(groups: &[Group]) {
             }),
         })
         .collect();
-    println!(
-        "{}",
-        serde_json::json!({ "status": status, "groups": groups_json })
-    );
+    serde_json::json!({ "status": status, "groups": groups_json })
 }
 
 /// The single-connection JSON envelope (`doctor --remote --json` etc.).

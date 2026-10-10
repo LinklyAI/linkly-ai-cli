@@ -229,9 +229,11 @@ linkly doctor --endpoint http://192.168.1.100:60606/mcp --token abc123
 Runs a series of checks (port file, server reachability, auth, MCP round-trip) and reports
 pass/fail with actionable advice. Without a flag it checks the local desktop and — when
 credentials for them are saved — the remote gateway and the LAN desktop at once, in
-separate groups, and succeeds when at least one connection works. With `--json` that run
-returns `{"status", "groups": [{"mode", "configured", "status", "checks", …}]}`; with a
-flag, the single-connection shape (`{"status", "mode", "checks", …}`) as before.
+separate groups, and succeeds when at least one connection works. A flag narrows the run
+to that one connection, in the same format. `--json` returns
+`{"status", "groups": [{"mode", "configured", "status", "checks", …}]}` either way; with a
+flag the earlier single-connection fields (`mode`, `checks`, `issues`, …) are also kept at
+the top level.
 
 ### List Libraries
 
