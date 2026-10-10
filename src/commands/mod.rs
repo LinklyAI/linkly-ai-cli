@@ -23,6 +23,7 @@ pub mod find_paths;
 pub mod grep;
 pub mod list;
 pub mod list_libraries;
+pub mod login;
 pub mod mcp;
 pub mod note_save;
 pub mod outline;

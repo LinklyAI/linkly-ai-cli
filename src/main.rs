@@ -162,6 +162,29 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
                 ..
             } => commands::auth::set_lan_key(&key, &endpoint),
             AuthAction::SetKey { key, .. } => commands::auth::set_key(&key),
+            AuthAction::Login {
+                no_wait,
+                wait,
+                timeout,
+                restart,
+                no_browser,
+            } => {
+                let mode = if wait {
+                    commands::login::LoginMode::WaitOnly
+                } else if no_wait {
+                    commands::login::LoginMode::StartOnly
+                } else {
+                    commands::login::LoginMode::StartAndWait
+                };
+                commands::login::run(commands::login::LoginOptions {
+                    mode,
+                    timeout,
+                    restart,
+                    no_browser,
+                    json: json_mode,
+                })
+                .await
+            }
             AuthAction::Status => commands::auth::status(json_mode).await,
             AuthAction::Logout { lan, .. } => {
                 let target = if lan {
@@ -169,7 +192,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
                 } else {
                     commands::auth::CredentialTarget::Remote
                 };
-                commands::auth::logout(target, json_mode)
+                commands::auth::logout(target, json_mode).await
             }
         }
         .map(found),

@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 /// Remote tunnel endpoint
 const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
-const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
+pub(crate) const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
 
 /// Credentials file path: <config dir>/credentials.json (see `config_dir`)
 /// New format: { "remotes": [{ "name": "default", "key": "lkai_xxx" }],
@@ -170,9 +170,8 @@ pub fn resolve(
     if remote {
         let api_key = read_credentials_api_key()?.context(
             "No API key configured for remote mode.\n\n\
-                 To set up:\n  \
-                   1. Get your API key from https://linkly.ai (Dashboard > API Keys)\n  \
-                   2. Run: linkly auth set-key <your-api-key>\n\n\
+                 To set up, run: linkly auth login\n  \
+                 (or paste a key from https://linkly.ai Dashboard > API Keys: linkly auth set-key <your-api-key>)\n\n\
                  Run 'linkly doctor --remote' to diagnose remote connection issues.",
         )?;
 
@@ -196,7 +195,7 @@ pub fn resolve(
             "Linkly AI Desktop is not running on this machine.\n\n\
              How to connect:\n  \
                Local:   Launch Linkly AI Desktop on this machine\n  \
-               Remote:  linkly <command> --remote  (API key required, get it from https://linkly.ai)\n  \
+               Remote:  linkly <command> --remote  (sign in first: linkly auth login)\n  \
                LAN:     linkly <command> --lan  (save it first: linkly auth set-key <token> --lan --endpoint <url>;\n\
              \x20          find the address and token in Desktop > Settings > MCP)\n\n\
              Run 'linkly doctor' to diagnose local connection issues."
@@ -293,6 +292,19 @@ pub(crate) fn read_credentials_api_key() -> Result<Option<String>> {
 
     // Legacy format: { "apiKey": "lkai_..." }
     Ok(parsed["apiKey"].as_str().map(|s| s.to_string()))
+}
+
+/// Where the stored remote key came from (`Some("login")` for `auth login`),
+/// `None` when unmarked — `set-key`, a legacy file, or no key at all.
+pub(crate) fn read_remote_key_source() -> Result<Option<String>> {
+    let Some(parsed) = read_credentials_file()? else {
+        return Ok(None);
+    };
+    Ok(parsed["remotes"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|entry| entry["source"].as_str())
+        .map(str::to_string))
 }
 
 /// Read the LAN connection from ~/.linkly/credentials.json.
@@ -485,17 +497,32 @@ pub fn delete_lan_credentials() -> Result<bool> {
     remove_credential_fields(&LAN_FIELDS)
 }
 
-/// Save API key to ~/.linkly/credentials.json (new format with remotes array),
-/// leaving the LAN section and any unknown fields untouched.
+/// `source` marker on a remote key that `linkly auth login` obtained. Only
+/// such keys are revoked remotely on logout: one pasted in with `set-key` may
+/// also serve other clients.
+pub const LOGIN_KEY_SOURCE: &str = "login";
+
+/// Save an API key pasted in with `auth set-key` (new format with remotes
+/// array), leaving the LAN section and any unknown fields untouched.
 pub fn save_credentials_api_key(api_key: &str) -> Result<()> {
+    save_remote_key(api_key, None)
+}
+
+/// Save an API key issued by `auth login`, marked so logout can revoke it.
+pub fn save_login_api_key(api_key: &str) -> Result<()> {
+    save_remote_key(api_key, Some(LOGIN_KEY_SOURCE))
+}
+
+fn save_remote_key(api_key: &str, source: Option<&str>) -> Result<()> {
     let mut map = load_credentials_for_update()?;
     // Drop the legacy field so the file holds a single key, not two that can
     // disagree.
     map.remove("apiKey");
-    map.insert(
-        "remotes".to_string(),
-        serde_json::json!([{ "name": "default", "key": api_key }]),
-    );
+    let mut entry = serde_json::json!({ "name": "default", "key": api_key });
+    if let Some(source) = source {
+        entry["source"] = serde_json::json!(source);
+    }
+    map.insert("remotes".to_string(), serde_json::json!([entry]));
     write_credentials_file(map)
 }
 
@@ -904,6 +931,24 @@ mod tests {
             assert_eq!(raw["future"]["x"], 1);
             assert_eq!(raw["remotes"][0]["key"], "lkai_new");
             assert_eq!(raw["lan"]["token"], "tk");
+        });
+    }
+
+    #[test]
+    fn login_keys_are_marked_and_set_key_clears_the_mark() {
+        with_temp_home("cred_source", |_home| {
+            save_login_api_key("lkai_from_login").unwrap();
+            assert_eq!(
+                read_remote_key_source().unwrap().as_deref(),
+                Some(LOGIN_KEY_SOURCE)
+            );
+            assert_eq!(
+                read_credentials_api_key().unwrap().as_deref(),
+                Some("lkai_from_login")
+            );
+
+            save_credentials_api_key("lkai_pasted").unwrap();
+            assert_eq!(read_remote_key_source().unwrap(), None);
         });
     }
 

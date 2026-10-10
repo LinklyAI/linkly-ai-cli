@@ -16,3 +16,20 @@ pub const VALID_DOC_TYPES: &[&str] = &[
     "pdf", "md", "xlsx", "csv", "docx", "txt", "pptx", "doc", "rtf", "epub", "html", "image",
     "audio", "video",
 ];
+
+/// Linkly AI website, which hosts the browser side of `linkly auth login`
+/// (the approval page and the login API).
+pub const WEB_BASE_URL: &str = "https://linkly.ai";
+
+/// Overrides [`WEB_BASE_URL`], e.g. `http://localhost:3000` to test login
+/// against a local web server. Not needed in normal use.
+pub const WEB_BASE_URL_ENV: &str = "LINKLY_WEB_URL";
+
+/// The website base URL in effect: `$LINKLY_WEB_URL` (trailing `/` dropped) or
+/// [`WEB_BASE_URL`].
+pub fn web_base_url() -> String {
+    match std::env::var(WEB_BASE_URL_ENV) {
+        Ok(url) if !url.trim().is_empty() => url.trim().trim_end_matches('/').to_string(),
+        _ => WEB_BASE_URL.to_string(),
+    }
+}

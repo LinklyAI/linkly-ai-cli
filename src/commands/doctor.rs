@@ -64,7 +64,7 @@ pub async fn run_from_args(
                             .to_string(),
                     ),
                     ConnectionMode::Remote => Some(
-                        "Run 'linkly auth set-key <your-api-key>' to configure.\n    Get your API key from https://linkly.ai (Dashboard > API Keys)."
+                        "Run 'linkly auth login' to sign in.\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
                             .to_string(),
                     ),
                     ConnectionMode::Lan { saved: true, .. } => Some(
@@ -296,7 +296,7 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                         "Check your --token value (find it in Desktop > Settings > MCP)."
                     }
                     ConnectionMode::Remote => {
-                        "Check your API key: run 'linkly auth set-key <your-api-key>'.\n    Get your key from https://linkly.ai (Dashboard > API Keys)."
+                        "Your API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n    (or 'linkly auth set-key <your-api-key>' with a key from https://linkly.ai Dashboard > API Keys)."
                     }
                     _ => "Unexpected auth failure for local connection.",
                 };

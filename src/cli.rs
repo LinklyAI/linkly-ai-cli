@@ -437,10 +437,50 @@ Find the LAN address and token in Linkly AI Desktop > Settings > MCP.")]
         endpoint: Option<String>,
     },
 
+    /// Sign in through the browser and save a new API key for remote access
+    #[command(long_about = "\
+Sign in through the browser and save a new API key for remote access.
+
+Prints a one-time link and a confirmation code. Open the link on any device,
+check the code, and click Authorize; the CLI then stores a freshly issued key,
+just as `set-key` would. The link is valid for 10 minutes.
+
+Agents (or anyone whose terminal can't wait) split it in two steps, run in the
+same environment and config directory:
+
+  linkly auth login --no-wait --json   # returns url + user_code; pass them on
+  linkly auth login --wait --json      # after approval; repeat on timeout
+
+One config directory holds one account (see LINKLY_CONFIG_DIR). Failures carry
+a code in --json mode: timeout, expired, denied, no_pending_login,
+login_in_progress, already_logged_in, network.")]
+    Login {
+        /// Start the login and return the link immediately; finish with --wait
+        #[arg(long, conflicts_with = "wait")]
+        no_wait: bool,
+
+        /// Finish a login started with --no-wait (can be run again after a timeout)
+        #[arg(long, conflicts_with_all = ["restart", "no_browser"])]
+        wait: bool,
+
+        /// Stop this wait after SECONDS (default: until the link expires; 300 with --wait)
+        #[arg(long, value_name = "SECONDS", conflicts_with = "no_wait")]
+        timeout: Option<u64>,
+
+        /// Abandon a login that is still waiting and start a new one
+        #[arg(long)]
+        restart: bool,
+
+        /// Only print the link, don't try to open a browser
+        #[arg(long)]
+        no_browser: bool,
+    },
+
     /// Show the stored credentials (remote key and LAN connection)
     Status,
 
-    /// Remove the stored remote key, or the LAN connection with --lan
+    /// Remove the stored remote key, or the LAN connection with --lan.
+    /// A key from `auth login` is also revoked on the server.
     Logout {
         /// Remove the remote API key (the default)
         #[arg(long, conflicts_with = "lan")]
@@ -646,6 +686,17 @@ mod tests {
         assert!(parse(&["auth", "set-key", "tk", "--lan", "--endpoint", "http://x:1"]).is_ok());
         assert!(parse(&["auth", "logout", "--remote"]).is_ok());
         assert!(parse(&["auth", "logout", "--lan"]).is_ok());
+    }
+
+    #[test]
+    fn login_flags_combine_only_in_meaningful_ways() {
+        assert!(parse(&["auth", "login"]).is_ok());
+        assert!(parse(&["auth", "login", "--no-wait", "--restart", "--no-browser"]).is_ok());
+        assert!(parse(&["auth", "login", "--wait", "--timeout", "10"]).is_ok());
+        assert!(parse(&["auth", "login", "--timeout", "60"]).is_ok());
+        assert!(parse(&["auth", "login", "--wait", "--no-wait"]).is_err());
+        assert!(parse(&["auth", "login", "--wait", "--restart"]).is_err());
+        assert!(parse(&["auth", "login", "--no-wait", "--timeout", "10"]).is_err());
     }
 
     #[test]

@@ -323,7 +323,8 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
                     "\nCheck your --token value (find it in Desktop > Settings > MCP)."
                 }
                 ConnectionMode::Remote => {
-                    "\nCheck your API key: run 'linkly auth set-key <your-api-key>'.\n\
+                    "\nYour API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n\
+                     (or 'linkly auth set-key <your-api-key>').\n\
                      Get your key from https://linkly.ai (Dashboard > API Keys)."
                 }
             };

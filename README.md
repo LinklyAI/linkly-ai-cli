@@ -304,11 +304,37 @@ The CLI supports three connection modes:
 ### Remote mode setup
 
 ```bash
-# Save your API Key (from https://linkly.ai/dashboard)
-linkly auth set-key lkai_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Sign in through the browser: prints a link and a confirmation code,
+# opens the browser when it can, and saves a new API key once you authorize
+linkly auth login
 
 # Search via remote tunnel
 linkly search "machine learning" --remote
+```
+
+The link works on any device — open it on your phone if the CLI runs on a server. It is
+valid for 10 minutes; the page shows which account you are authorizing and the code to
+compare with your terminal.
+
+Agents, or anything that cannot wait in the foreground, split the login in two steps.
+Run both in the same environment and config directory:
+
+```bash
+linkly auth login --no-wait --json   # {"status":"pending","url":…,"user_code":…,"expires_in":600}
+# … pass url and user_code to the user, wait for them to authorize …
+linkly auth login --wait --json      # {"status":"ok","account":…,"plan":…,"key_preview":…}
+```
+
+`--wait` stops after 300 seconds (`--timeout` to change); run it again while the link is
+still valid. In `--json` mode failures carry a `code`: `timeout`, `expired`, `denied`,
+`no_pending_login`, `login_in_progress` (use `--wait`, or `--restart` to start over),
+`already_logged_in` (run `linkly auth logout` first) and `network`. Every message names
+the command to run next.
+
+Prefer to paste a key? Create one in the dashboard and save it instead:
+
+```bash
+linkly auth set-key lkai_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ### LAN mode setup
@@ -335,13 +361,16 @@ linkly auth logout          # remove the remote API key (same as --remote)
 linkly auth logout --lan    # remove the LAN connection
 ```
 
-Set `LINKLY_CONFIG_DIR` to keep credentials somewhere other than `~/.linkly` — for
+`logout` also revokes a key that `auth login` issued. A key saved with `set-key` is only
+removed locally, since it may be in use elsewhere — revoke it in the dashboard if needed.
+
+Set `LINKLY_CONFIG_DIR` to keep credentials (and a login waiting for approval) somewhere other than `~/.linkly` — for
 example one directory per user when an agent serves several people from the same
 system account. Each directory holds one account. Discovery of the local desktop app
 (`~/.linkly/port`) is not affected.
 
 ```bash
-LINKLY_CONFIG_DIR=~/.linkly-alice linkly auth set-key lkai_xxx
+LINKLY_CONFIG_DIR=~/.linkly-alice linkly auth login --no-wait --json
 LINKLY_CONFIG_DIR=~/.linkly-alice linkly search "notes" --remote
 ```
 

@@ -4,10 +4,14 @@ use serde::Deserialize;
 
 use crate::connection::{
     credentials_path, delete_lan_credentials, delete_remote_credentials, normalize_endpoint,
-    read_credentials_api_key, read_lan_credentials, save_credentials_api_key, save_lan_credentials,
-    LanCredentials,
+    read_credentials_api_key, read_lan_credentials, read_remote_key_source,
+    save_credentials_api_key, save_lan_credentials, LanCredentials, LOGIN_KEY_SOURCE,
 };
+use crate::constants::web_base_url;
 use crate::output;
+
+/// Where users manage (and revoke) their keys by hand.
+const DASHBOARD_KEYS_URL: &str = "https://linkly.ai/dashboard/integrations";
 
 /// Endpoint used to validate a stored key and resolve its plan. It is a
 /// read-only quota probe — it does not consume quota — and it is the only
@@ -97,7 +101,7 @@ pub async fn status(json_mode: bool) -> Result<()> {
                 serde_json::json!({
                     "status": "success",
                     "configured": false,
-                    "hint": "Run `linkly auth set-key <api-key>` to configure remote access.",
+                    "hint": "Run `linkly auth login` (or `linkly auth set-key <api-key>`) to configure remote access.",
                     "lan": lan_json,
                 })
             );
@@ -105,8 +109,8 @@ pub async fn status(json_mode: bool) -> Result<()> {
             println!("{}", "Linkly AI Auth".bold());
             println!("  {}  {}", "Key:".dimmed(), "not configured".yellow());
             println!("  {}  {}", "LAN:".dimmed(), lan_summary(lan.as_ref()));
-            println!("\n  Run `linkly auth set-key <api-key>` to enable --remote.");
-            println!("  Get a key from https://linkly.ai (Dashboard > API Keys).");
+            println!("\n  Run `linkly auth login` to enable --remote,");
+            println!("  or paste a key from https://linkly.ai (Dashboard > API Keys) with `linkly auth set-key <api-key>`.");
             if lan.is_none() {
                 println!(
                     "  Run `linkly auth set-key <token> --lan --endpoint <url>` to enable --lan."
@@ -166,7 +170,7 @@ pub async fn status(json_mode: bool) -> Result<()> {
     println!("  {}  {}", "File:".dimmed(), path.display());
     // Advice last, so it doesn't split the field list in two.
     if matches!(probe, KeyProbe::Invalid) {
-        println!("\n  The stored key was rejected. Run `linkly auth set-key <api-key>` with a current key.");
+        println!("\n  The stored key was rejected. Run `linkly auth logout`, then `linkly auth login` (or `linkly auth set-key <api-key>`).");
     }
     Ok(())
 }
@@ -196,7 +200,20 @@ fn lan_summary(lan: Option<&LanCredentials>) -> String {
 /// Removes only the targeted credential; the other one stays usable.
 /// Idempotent: removing credentials that were never there is a success, not an
 /// error — the post-condition the caller asked for already holds.
-pub fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
+///
+/// A remote key that `auth login` issued is also revoked on the server first.
+/// A failed revocation never blocks the local logout; it is reported instead.
+/// A key pasted in with `set-key` is only removed locally — it may be in use
+/// elsewhere — and the user is pointed at the dashboard.
+pub async fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
+    let revocation = match target {
+        CredentialTarget::Remote => match remote_key_to_revoke() {
+            Ok(Some(key)) => Some(revoke_login_key(&key).await),
+            Ok(None) => None,
+            Err(e) => return output::print_error(&e.to_string(), json_mode),
+        },
+        CredentialTarget::Lan => None,
+    };
     let removed = match target {
         CredentialTarget::Remote => delete_remote_credentials(),
         CredentialTarget::Lan => delete_lan_credentials(),
@@ -207,21 +224,45 @@ pub fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
     };
 
     if json_mode {
-        let target = match target {
+        let target_name = match target {
             CredentialTarget::Remote => "remote",
             CredentialTarget::Lan => "lan",
         };
-        println!(
-            "{}",
-            serde_json::json!({ "status": "success", "removed": removed, "target": target })
-        );
+        let mut obj =
+            serde_json::json!({ "status": "success", "removed": removed, "target": target_name });
+        if target == CredentialTarget::Remote && removed {
+            match &revocation {
+                Some(Ok(())) => obj["remote_revoked"] = serde_json::json!(true),
+                Some(Err(reason)) => {
+                    obj["remote_revoked"] = serde_json::json!(false);
+                    obj["revoke_error"] = serde_json::json!(reason);
+                }
+                None => obj["remote_revoked"] = serde_json::Value::Null,
+            }
+        }
+        println!("{}", obj);
         return Ok(());
     }
 
     let path = credentials_path()?;
     match (target, removed) {
         (CredentialTarget::Remote, true) => {
-            println!("Credentials removed from {}", path.display())
+            println!("Credentials removed from {}", path.display());
+            match &revocation {
+                Some(Ok(())) => println!(
+                    "The API key was revoked on the server (it stops working within about 90 seconds)."
+                ),
+                Some(Err(reason)) => println!(
+                    "Logged out locally, but the remote key was not confirmed revoked ({}).\n\
+                     Revoke it at {} if you no longer need it.",
+                    reason, DASHBOARD_KEYS_URL
+                ),
+                None => println!(
+                    "This key was added with `set-key` and may be used elsewhere, so it was not revoked.\n\
+                     Revoke it at {} if you no longer need it.",
+                    DASHBOARD_KEYS_URL
+                ),
+            }
         }
         (CredentialTarget::Remote, false) => {
             println!("No credentials were stored — nothing to remove.")
@@ -234,6 +275,35 @@ pub fn logout(target: CredentialTarget, json_mode: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The stored remote key, if `auth login` issued it.
+fn remote_key_to_revoke() -> Result<Option<String>> {
+    if read_remote_key_source()?.as_deref() != Some(LOGIN_KEY_SOURCE) {
+        return Ok(None);
+    }
+    read_credentials_api_key()
+}
+
+/// Ask the website to revoke a login-issued key. `Err` carries a short reason.
+///
+/// A key the server no longer knows (401) or does not consider CLI-issued
+/// (409) counts as done: either way there is nothing left for us to revoke.
+async fn revoke_login_key(key: &str) -> std::result::Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("{}/api/cli/auth/revoke", web_base_url()))
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|_| "website unreachable".to_string())?;
+    match resp.status().as_u16() {
+        200..=299 | 401 | 409 => Ok(()),
+        code => Err(format!("website returned HTTP {}", code)),
+    }
 }
 
 /// Outcome of asking the gateway about a stored key.
@@ -301,7 +371,7 @@ fn display_plan(plan: Option<&str>) -> String {
 
 /// Mask a key for display: keep the `lkai_` prefix plus four characters at each
 /// end, so two keys can be told apart without printing a usable secret.
-fn mask_key(key: &str) -> String {
+pub(crate) fn mask_key(key: &str) -> String {
     let chars: Vec<char> = key.chars().collect();
     if chars.len() <= 13 {
         return "*".repeat(chars.len());
@@ -325,6 +395,16 @@ fn mask_lan_token(token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The logout paths exercised here never touch the network (no
+    /// login-issued key is stored), so a throwaway runtime is enough.
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(f)
+    }
 
     // ── T3.2: set-key 验证 ───────────────────────────────
 
@@ -385,8 +465,8 @@ mod tests {
     fn logout_is_idempotent_when_nothing_is_stored() {
         crate::test_helpers::with_temp_home("auth_logout_empty", |_home| {
             // No credentials written — logout must still succeed.
-            assert!(logout(CredentialTarget::Remote, false).is_ok());
-            assert!(logout(CredentialTarget::Lan, false).is_ok());
+            assert!(block_on(logout(CredentialTarget::Remote, false)).is_ok());
+            assert!(block_on(logout(CredentialTarget::Lan, false)).is_ok());
         });
     }
 
@@ -395,7 +475,7 @@ mod tests {
         crate::test_helpers::with_temp_home("auth_logout_removes", |home| {
             set_key("lkai_0123456789abcdef0123456789abcdef").expect("set_key");
             assert!(read_credentials_api_key().expect("read").is_some());
-            assert!(logout(CredentialTarget::Remote, false).is_ok());
+            assert!(block_on(logout(CredentialTarget::Remote, false)).is_ok());
             assert!(read_credentials_api_key()
                 .expect("read after logout")
                 .is_none());
@@ -462,7 +542,7 @@ mod tests {
             set_key(REMOTE_KEY).expect("remote");
             set_lan_key("lan-token-1234567", "http://192.168.1.5:60606").expect("lan");
 
-            logout(CredentialTarget::Lan, false).expect("logout --lan");
+            block_on(logout(CredentialTarget::Lan, false)).expect("logout --lan");
             assert!(read_lan_credentials().unwrap().is_none());
             assert_eq!(
                 read_credentials_api_key().unwrap().as_deref(),
@@ -470,11 +550,11 @@ mod tests {
             );
 
             set_lan_key("lan-token-1234567", "http://192.168.1.5:60606").expect("lan");
-            logout(CredentialTarget::Remote, false).expect("logout");
+            block_on(logout(CredentialTarget::Remote, false)).expect("logout");
             assert!(read_credentials_api_key().unwrap().is_none());
             assert!(read_lan_credentials().unwrap().is_some());
 
-            logout(CredentialTarget::Lan, false).expect("logout --lan");
+            block_on(logout(CredentialTarget::Lan, false)).expect("logout --lan");
             assert!(!home.join(".linkly").join("credentials.json").exists());
         });
     }
