@@ -168,12 +168,13 @@ pub fn resolve(
 
     // Mode 3: remote tunnel via mcp.linkly.ai
     if remote {
-        let api_key = read_credentials_api_key()?.context(
-            "No API key configured for remote mode.\n\n\
-                 To set up, run: linkly auth login\n  \
-                 (or paste a key from https://linkly.ai Dashboard > API Keys: linkly auth set-key <your-api-key>)\n\n\
-                 Run 'linkly doctor --remote' to diagnose remote connection issues.",
-        )?;
+        let api_key = read_credentials_api_key()?.context(concat!(
+            "No API key configured for remote mode.\n\n",
+            "To set up, run: linkly auth login\n  ",
+            crate::agent_login_hint!(),
+            "\n  (or paste a key from https://linkly.ai Dashboard > API Keys: linkly auth set-key <your-api-key>)\n\n",
+            "Run 'linkly doctor --remote' to diagnose remote connection issues."
+        ))?;
 
         return Ok(ConnectionInfo {
             mcp_url: REMOTE_MCP_URL.to_string(),

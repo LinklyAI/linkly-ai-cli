@@ -17,6 +17,17 @@ pub const VALID_DOC_TYPES: &[&str] = &[
     "audio", "video",
 ];
 
+/// How an agent signs in, appended to every hint that suggests
+/// `linkly auth login`: the plain command waits in the foreground until the
+/// link is approved, so an agent's shell tool would never show the link to
+/// the user. A macro so it can be spliced into `concat!` literals.
+#[macro_export]
+macro_rules! agent_login_hint {
+    () => {
+        "(agents: `linkly auth login --no-wait --json`, then `linkly auth login --wait --json`)"
+    };
+}
+
 /// Linkly AI website, which hosts the browser side of `linkly auth login`
 /// (the approval page and the login API).
 pub const WEB_BASE_URL: &str = "https://linkly.ai";

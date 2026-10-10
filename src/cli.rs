@@ -59,11 +59,12 @@ pub struct ConnectionArgs {
     pub token: Option<String>,
 
     /// Reach your Desktop through the remote tunnel (https://mcp.linkly.ai)
-    /// instead of over the local network. Requires Pro, and your Desktop must
-    /// be online — the tunnel forwards to it, it is not a copy of your data in
-    /// the cloud. Cloud libraries are the exception: they are served by the
-    /// cloud itself, so `--library cloud://owner/slug` works even when Desktop
-    /// is offline. Notes always live on the Desktop machine.
+    /// instead of over the local network. Local content needs Pro and your
+    /// Desktop online — the tunnel forwards to it, it is not a copy of your
+    /// data in the cloud. Linked cloud libraries are the exception: the cloud
+    /// serves them itself, on any plan and with Desktop offline
+    /// (`--library cloud://owner/slug`). Notes always live on the Desktop
+    /// machine. Needs a saved key: `linkly auth login` or `auth set-key`.
     #[arg(long, conflicts_with_all = ["endpoint", "token"])]
     pub remote: bool,
 
@@ -334,7 +335,7 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Diagnose connection issues (use --remote or --endpoint for non-local modes)
+    /// Diagnose connections: without a flag, checks this machine's Desktop plus the remote gateway and LAN Desktop when configured; --remote / --lan / --endpoint check just one
     Doctor {
         #[command(flatten)]
         conn: ConnectionArgs,
@@ -441,15 +442,20 @@ Find the LAN address and token in Linkly AI Desktop > Settings > MCP.")]
     #[command(long_about = "\
 Sign in through the browser and save a new API key for remote access.
 
-Prints a one-time link and a confirmation code. Open the link on any device,
-check the code, and click Authorize; the CLI then stores a freshly issued key,
-just as `set-key` would. The link is valid for 10 minutes.
-
-Agents (or anyone whose terminal can't wait) split it in two steps, run in the
+AGENTS: don't run plain `linkly auth login` — it waits in the foreground until
+the link is approved, so the user never sees the link. Use two steps, in the
 same environment and config directory:
 
-  linkly auth login --no-wait --json   # returns url + user_code; pass them on
-  linkly auth login --wait --json      # after approval; repeat on timeout
+  linkly auth login --no-wait --json   # returns url + user_code; send both to the user
+  linkly auth login --wait --json      # after they approve; repeat on `timeout`
+
+--wait gives up after 300 s; if your shell tool kills commands sooner, pass a
+shorter --timeout. A killed or timed-out --wait doesn't cancel the login.
+
+People at a terminal just run `linkly auth login`: it prints a one-time link
+and a confirmation code, opens the browser, and stores a freshly issued key
+once the link is approved (as `set-key` would). The link works on any device
+and is valid for 10 minutes.
 
 One config directory holds one account (see LINKLY_CONFIG_DIR). Failures carry
 a code in --json mode: timeout, expired, denied, no_pending_login,

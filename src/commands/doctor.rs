@@ -120,9 +120,11 @@ async fn diagnose(
                 ConnectionMode::Local => {
                     "Launch Linkly AI Desktop on this machine, or use --remote / --lan."
                 }
-                ConnectionMode::Remote => {
-                    "Run 'linkly auth login' to sign in.\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
-                }
+                ConnectionMode::Remote => concat!(
+                    "Run 'linkly auth login' to sign in ",
+                    crate::agent_login_hint!(),
+                    ".\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
+                ),
                 ConnectionMode::Lan { saved: true, .. } => {
                     "Run 'linkly auth set-key <token> --lan --endpoint <url>' to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
                 }
@@ -215,7 +217,11 @@ async fn run_all(client: Option<&str>, json_mode: bool) -> Result<()> {
             mode: "remote",
             title: "Remote (--remote)",
             checks: remote,
-            setup_hint: "Not configured. Run `linkly auth login` to enable --remote.",
+            setup_hint: concat!(
+                "Not configured. Run `linkly auth login` to enable --remote ",
+                crate::agent_login_hint!(),
+                "."
+            ),
         },
         Group {
             mode: "lan",
@@ -428,9 +434,11 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                     ConnectionMode::Lan { .. } => {
                         "Check your --token value (find it in Desktop > Settings > MCP)."
                     }
-                    ConnectionMode::Remote => {
-                        "Your API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n    (or 'linkly auth set-key <your-api-key>' with a key from https://linkly.ai Dashboard > API Keys)."
-                    }
+                    ConnectionMode::Remote => concat!(
+                        "Your API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n    ",
+                        crate::agent_login_hint!(),
+                        "\n    (or 'linkly auth set-key <your-api-key>' with a key from https://linkly.ai Dashboard > API Keys)."
+                    ),
                     _ => "Unexpected auth failure for local connection.",
                 };
                 (

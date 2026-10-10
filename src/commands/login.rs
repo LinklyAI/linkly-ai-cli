@@ -241,8 +241,10 @@ fn already_logged_in() -> Result<anyhow::Error> {
     Ok(fail(
         LoginErrorCode::AlreadyLoggedIn,
         format!(
-            "Already logged in ({}). Run `linkly auth logout` first, or set LINKLY_CONFIG_DIR \
-             to sign in another account in a separate directory.",
+            "Already logged in ({}). Check the key with `linkly auth status`; there is \
+             usually nothing more to do. To switch accounts, run `linkly auth logout` first \
+             (it revokes a key issued by `auth login`), or set LINKLY_CONFIG_DIR to sign in \
+             another account in a separate directory.",
             credentials_path()?.display()
         ),
     ))
@@ -306,7 +308,14 @@ async fn start_login() -> Result<PendingLogin> {
     let network = |detail: String| {
         fail(
             LoginErrorCode::Network,
-            format!("Could not start the login at {}: {}. Check your connection and run `linkly auth login` again.", web_base, detail),
+            format!(
+                concat!(
+                    "Could not start the login at {}: {}. Check your connection and run `linkly auth login` again ",
+                    crate::agent_login_hint!(),
+                    "."
+                ),
+                web_base, detail
+            ),
         )
     };
     let resp = http_client()?
@@ -503,7 +512,11 @@ async fn wait_loop<P: Poller, C: Clock>(
                 remove_pending(pending_path)?;
                 return Err(fail(
                     LoginErrorCode::Denied,
-                    "The login was denied in the browser. Run `linkly auth login` to try again.",
+                    concat!(
+                        "The login was denied in the browser. Run `linkly auth login` to try again ",
+                        crate::agent_login_hint!(),
+                        "."
+                    ),
                 ));
             }
             Ok(PollOutcome::Gone) => {
@@ -551,7 +564,11 @@ async fn wait_loop<P: Poller, C: Clock>(
 fn expired() -> anyhow::Error {
     fail(
         LoginErrorCode::Expired,
-        "The login link has expired. Run `linkly auth login` to get a new one.",
+        concat!(
+            "The login link has expired. Run `linkly auth login` to get a new one ",
+            crate::agent_login_hint!(),
+            "."
+        ),
     )
 }
 

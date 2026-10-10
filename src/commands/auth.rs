@@ -127,9 +127,11 @@ pub async fn status(json_mode: bool) -> Result<()> {
             "lan": lan_status_json(lan.as_ref()),
         });
         if key.is_none() {
-            obj["hint"] = serde_json::json!(
-                "Run `linkly auth login` (or `linkly auth set-key <api-key>`) to configure remote access."
-            );
+            obj["hint"] = serde_json::json!(concat!(
+                "Run `linkly auth login` ",
+                crate::agent_login_hint!(),
+                " or `linkly auth set-key <api-key>` to configure remote access."
+            ));
         }
         for field in ["key_preview", "valid", "plan", "probe_error"] {
             if let Some(value) = obj["remote"].get(field).cloned() {
@@ -144,9 +146,10 @@ pub async fn status(json_mode: bool) -> Result<()> {
 
     println!("\n  {}", "Remote (--remote)".bold());
     match &key {
-        None => println!(
-            "    Not configured. Run `linkly auth login` (or `linkly auth set-key <api-key>`)."
-        ),
+        None => println!(concat!(
+            "    Not configured. Run `linkly auth login` or `linkly auth set-key <api-key>`.\n    ",
+            crate::agent_login_hint!()
+        )),
         Some(key) => {
             println!(
                 "    {}     {}  {}",
@@ -157,7 +160,11 @@ pub async fn status(json_mode: bool) -> Result<()> {
             let state = match &probe {
                 Some(KeyProbe::Valid { plan }) => format!("{}, {} plan", "valid".green(), plan),
                 Some(KeyProbe::Invalid) => format!(
-                    "{}. Run `linkly auth logout`, then `linkly auth login`.",
+                    concat!(
+                        "{}. Run `linkly auth logout`, then `linkly auth login`\n            ",
+                        crate::agent_login_hint!(),
+                        "."
+                    ),
                     "rejected".red()
                 ),
                 Some(KeyProbe::Unknown { reason }) => {

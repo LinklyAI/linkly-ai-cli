@@ -322,11 +322,11 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
                 ConnectionMode::Lan { .. } => {
                     "\nCheck your --token value (find it in Desktop > Settings > MCP)."
                 }
-                ConnectionMode::Remote => {
-                    "\nYour API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n\
-                     (or 'linkly auth set-key <your-api-key>').\n\
-                     Get your key from https://linkly.ai (Dashboard > API Keys)."
-                }
+                ConnectionMode::Remote => concat!(
+                    "\nYour API key was rejected. Run 'linkly auth logout', then 'linkly auth login'\n",
+                    crate::agent_login_hint!(),
+                    "\n(or 'linkly auth set-key <your-api-key>' with a key from https://linkly.ai Dashboard > API Keys)."
+                ),
             };
             bail!(
                 "Authentication failed (401): {}{}\n\n{}",

@@ -73,12 +73,13 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
             anyhow::bail!(
                 "Authentication failed (401){}\n\
                  For LAN access: run `linkly auth set-key <token> --lan --endpoint <url>`, then use --lan\n\
-                 For remote access: run `linkly auth login` (or `linkly auth set-key <api-key>`)",
+                 For remote access: run `linkly auth login` {} (or `linkly auth set-key <api-key>`)",
                 if body_trimmed.is_empty() {
                     String::new()
                 } else {
                     format!(": {}", body_trimmed)
-                }
+                },
+                crate::agent_login_hint!()
             );
         }
         // A proxy in the path answers with its own status codes, so say so
@@ -334,7 +335,11 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let status_code = resp.status().as_u16();
     if status_code == 401 || status_code == 403 {
         let msg = format!(
-            "Authentication failed ({}). Run `linkly auth logout`, then `linkly auth login` (or `linkly auth set-key <api-key>`).",
+            concat!(
+                "Authentication failed ({}). Run `linkly auth logout`, then `linkly auth login` ",
+                crate::agent_login_hint!(),
+                " (or `linkly auth set-key <api-key>`)."
+            ),
             status_code
         );
         if json_mode {
