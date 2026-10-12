@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use rmcp::service::ServiceError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 
-use crate::client::{McpClient, ToolError};
+use crate::client::{McpClient, ToolError, ToolFailure};
 use crate::connection::ConnectionInfo;
 
 #[derive(Clone)]
@@ -79,6 +79,36 @@ impl StdioBridgeHandler {
         }
         CallToolResult::success(vec![Content::text(notice), Content::text(content)])
     }
+
+    /// Turn an upstream call's outcome into this bridge's answer. A tool that
+    /// ran and reported failure goes back as a tool result with `isError`
+    /// (see [`tool_failure_result`]); any other failure goes through `on_err`.
+    fn forward(
+        &self,
+        outcome: anyhow::Result<String>,
+        on_err: fn(anyhow::Error) -> McpError,
+    ) -> Result<CallToolResult, McpError> {
+        match outcome {
+            Ok(content) => Ok(self.finish(content)),
+            Err(err) => tool_failure_result(&err).map_or_else(|| Err(on_err(err)), Ok),
+        }
+    }
+}
+
+/// The upstream tool ran and said it failed (`isError: true`): the gateway's
+/// paywall, Desktop offline / unpaired / outdated / timed out notices, or a
+/// Desktop-side tool error. Hand it on as the same kind of result, text
+/// intact. Turning it into a JSON-RPC error would let many clients collapse it
+/// into a bare "tool call failed" the model never reads.
+fn tool_failure_result(err: &anyhow::Error) -> Option<CallToolResult> {
+    err.downcast_ref::<ToolFailure>()
+        .map(|failure| CallToolResult::error(vec![Content::text(failure.text.clone())]))
+}
+
+/// Upstream failure for the tools that predate [`bridge_error`]: everything
+/// flattened into `-32603 "Bridge error: …"`.
+fn flat_bridge_error(err: anyhow::Error) -> McpError {
+    McpError::internal_error(format!("Bridge error: {}", err), None)
 }
 
 /// Map an upstream failure to an MCP error for the cloud-only tools (#77).
@@ -619,13 +649,11 @@ impl StdioBridgeHandler {
     ) -> Result<CallToolResult, McpError> {
         let args = serde_json::json!({});
 
-        let content = self
+        let outcome = self
             .client
             .call_tool("list_libraries", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+            .await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -640,13 +668,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("explore", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("explore", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -661,13 +684,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("find_paths", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("find_paths", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -682,13 +700,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("search", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("search", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -703,13 +716,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("outline", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("outline", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -724,13 +732,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("read", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("read", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -745,13 +748,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("list", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("list", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -766,13 +764,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("note_save", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("note_save", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -787,13 +780,8 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
-            .client
-            .call_tool("grep", args, &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+        let outcome = self.client.call_tool("grep", args, &self.conn).await;
+        self.forward(outcome, flat_bridge_error)
     }
 }
 
@@ -817,13 +805,11 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
+        let outcome = self
             .client
             .call_tool("library_search", args, &self.conn)
-            .await
-            .map_err(bridge_error)?;
-
-        Ok(self.finish(content))
+            .await;
+        self.forward(outcome, bridge_error)
     }
 
     // The gateway's only other write tool (#112 merged link and unlink into one,
@@ -848,13 +834,11 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let content = self
+        let outcome = self
             .client
             .call_tool("library_link", args, &self.conn)
-            .await
-            .map_err(bridge_error)?;
-
-        Ok(self.finish(content))
+            .await;
+        self.forward(outcome, bridge_error)
     }
 
     #[tool(
@@ -866,13 +850,11 @@ impl StdioBridgeHandler {
         &self,
         Parameters(_input): Parameters<ListLibrariesInput>,
     ) -> Result<CallToolResult, McpError> {
-        let content = self
+        let outcome = self
             .client
             .call_tool("list_libraries", serde_json::json!({}), &self.conn)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Bridge error: {}", e), None))?;
-
-        Ok(self.finish(content))
+            .await;
+        self.forward(outcome, flat_bridge_error)
     }
 }
 
@@ -954,6 +936,41 @@ impl ServerHandler for StdioBridgeHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The gateway reports paywall / Desktop offline / timeout as `isError`
+    // results. The bridge must hand them on as results, not -32603, so the
+    // model reads the guidance instead of a bare protocol failure.
+    #[test]
+    fn tool_failure_becomes_error_result_with_text() {
+        let err: anyhow::Error = ToolFailure {
+            text: "Desktop unavailable — search needs Desktop reachable.".to_string(),
+        }
+        .into();
+        let result = tool_failure_result(&err).expect("tool failure maps to a result");
+        assert_eq!(result.is_error, Some(true));
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<String>();
+        assert_eq!(
+            text,
+            "Desktop unavailable — search needs Desktop reachable."
+        );
+    }
+
+    #[test]
+    fn other_failures_are_not_tool_results() {
+        let transport = anyhow::anyhow!("connection refused");
+        assert!(tool_failure_result(&transport).is_none());
+        let rpc: anyhow::Error = ToolError {
+            code: -32602,
+            message: "Invalid arguments".to_string(),
+            data: None,
+        }
+        .into();
+        assert!(tool_failure_result(&rpc).is_none());
+    }
 
     // C-32: a typo like `modifiedafter` (missing underscore) used to be
     // silently dropped during the bridge `to_value` round-trip and never

@@ -16,8 +16,9 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 /// Structured JSON-RPC error returned by the gateway/server, carrying the
 /// `code` / `message` / `data` fields so `--json` output can surface the error
 /// code and the `data.guidance` the cloud gateway provides. Non-protocol
-/// failures (bad arguments, timeout, transport, tool-level `isError`) stay as
-/// plain `anyhow` errors and are rendered as strings by `print_tool_error`.
+/// failures (bad arguments, timeout, transport) stay as plain `anyhow` errors,
+/// and tool-level `isError` is a [`ToolFailure`]; `print_tool_error` renders
+/// both as strings.
 #[derive(Debug)]
 pub struct ToolError {
     pub code: i32,
@@ -36,6 +37,24 @@ impl std::fmt::Display for ToolError {
 }
 
 impl std::error::Error for ToolError {}
+
+/// A tool ran but reported failure (`isError: true` in the call result): the
+/// gateway's paywall / Desktop offline / timeout notices, or a Desktop-side
+/// tool error. `text` is the result's text content, written for the model to
+/// read. Kept apart from transport errors so `linkly mcp` can hand it on as a
+/// tool result instead of a protocol error.
+#[derive(Debug)]
+pub struct ToolFailure {
+    pub text: String,
+}
+
+impl std::fmt::Display for ToolFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Tool error: {}", self.text)
+    }
+}
+
+impl std::error::Error for ToolFailure {}
 
 impl From<rmcp::model::ErrorData> for ToolError {
     fn from(error: rmcp::model::ErrorData) -> Self {
@@ -191,8 +210,10 @@ impl McpClient {
         };
 
         if result.is_error.unwrap_or(false) {
-            let msg = extract_text(&result.content);
-            bail!("Tool error: {}", msg);
+            return Err(ToolFailure {
+                text: extract_text(&result.content),
+            }
+            .into());
         }
 
         Ok(extract_text(&result.content))
