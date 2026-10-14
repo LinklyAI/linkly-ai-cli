@@ -41,7 +41,10 @@ pub async fn run() -> Result<()> {
 
     println!("Downloading {}...", platform_key);
 
-    let bytes = reqwest::get(download_url)
+    let bytes = crate::http::client_builder()
+        .build()?
+        .get(download_url)
+        .send()
         .await?
         .error_for_status()?
         .bytes()
@@ -75,7 +78,7 @@ async fn fetch_latest() -> Result<LatestInfo> {
     // Bound the request — without a timeout `reqwest::get` will hang
     // indefinitely if the updater host is unreachable, blocking the
     // background spawn that main.rs waits on at exit.
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()
         .context("Failed to build HTTP client")?;

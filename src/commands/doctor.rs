@@ -378,7 +378,7 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
         format!("{}/health", conn.base_url)
     };
 
-    let client = match reqwest::Client::builder()
+    let client = match crate::http::client_builder()
         .timeout(Duration::from_secs(5))
         .build()
     {

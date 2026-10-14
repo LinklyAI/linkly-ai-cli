@@ -331,7 +331,7 @@ enum Revocation {
 /// Ask the website to revoke a login-issued key. `Err` carries a short reason.
 async fn revoke_login_key(key: &str) -> std::result::Result<Revocation, String> {
     let web_base = web_base_url().map_err(|e| e.to_string())?;
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
@@ -356,7 +356,7 @@ enum KeyProbe {
 }
 
 async fn probe_key(key: &str) -> KeyProbe {
-    let client = match reqwest::Client::builder()
+    let client = match crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
     {

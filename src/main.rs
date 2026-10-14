@@ -5,6 +5,7 @@ mod commands;
 mod connection;
 mod constants;
 mod doc_ids;
+mod http;
 mod manifest;
 mod outcome;
 mod output;

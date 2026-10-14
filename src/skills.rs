@@ -198,7 +198,7 @@ pub fn detect() -> Local {
 }
 
 pub async fn fetch_latest() -> Result<Latest> {
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(FETCH_TIMEOUT)
         .build()
         .context("Failed to build HTTP client")?;

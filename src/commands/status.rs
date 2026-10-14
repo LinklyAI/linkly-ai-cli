@@ -29,7 +29,7 @@ async fn run_local(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     // Started before the health request so the two round-trips overlap.
     let skill_check = tokio::spawn(check_skill());
 
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
     let mut req = client.get(&url);
@@ -309,7 +309,7 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     // so remote status reports it too.
     let skill_check = tokio::spawn(check_skill());
 
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
     let mut req = client.get(&url);

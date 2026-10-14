@@ -172,7 +172,11 @@ async fn download() -> Result<Vec<u8>> {
         Err(_) => skills::fallback_zip_url().to_string(),
     };
     println!("Downloading {}...", url);
-    let bytes = reqwest::get(&url)
+    let bytes = crate::http::client_builder()
+        .build()
+        .context("Failed to build HTTP client")?
+        .get(&url)
+        .send()
         .await
         .context("Failed to download the skills package")?
         .error_for_status()

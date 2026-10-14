@@ -279,7 +279,9 @@ struct ServerError {
 }
 
 fn http_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?)
+    Ok(crate::http::client_builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()?)
 }
 
 /// Keep a server-supplied poll interval within sane bounds.

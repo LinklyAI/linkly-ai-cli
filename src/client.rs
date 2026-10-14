@@ -141,7 +141,11 @@ impl McpClient {
         }
         config = config.custom_headers(client_headers(conn.client_name.as_deref()));
 
-        let transport = StreamableHttpClientTransport::from_config(config);
+        // `from_config` would use a bare `reqwest::Client` with no User-Agent.
+        let transport = StreamableHttpClientTransport::with_client(
+            crate::http::client_builder().build()?,
+            config,
+        );
 
         let service = tokio::time::timeout(CONNECT_TIMEOUT, CliClientHandler.serve(transport))
             .await
@@ -256,7 +260,7 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
     } else {
         format!("{}/health", conn.base_url)
     };
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
