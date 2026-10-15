@@ -58,14 +58,14 @@ pub fn set_lan_key(token: &str, endpoint: &str) -> Result<()> {
     if token.is_empty() {
         bail!(
             "LAN token is empty.\n\
-             Copy it from Linkly AI Desktop > Settings > MCP."
+             Copy it from Linkly AI Desktop > Agent usage > View MCP connection settings."
         );
     }
     let endpoint = endpoint.trim();
     if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
         bail!(
             "Invalid LAN endpoint '{}'. Expected a URL like http://192.168.1.100:60606\n\
-             Find the address in Linkly AI Desktop > Settings > MCP.",
+             Find the address in Linkly AI Desktop > Agent usage > View MCP connection settings.",
             endpoint
         );
     }

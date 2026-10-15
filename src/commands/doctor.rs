@@ -136,7 +136,7 @@ async fn diagnose(
                     ".\n    Or paste a key from https://linkly.ai (Dashboard > API Keys): linkly auth set-key <your-api-key>"
                 ),
                 ConnectionMode::Lan { saved: true, .. } => {
-                    "Run `linkly auth set-key <token> --lan --endpoint <url>` to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Settings > MCP."
+                    "Run `linkly auth set-key <token> --lan --endpoint <url>` to save your LAN connection.\n    Find the address and token in Linkly AI Desktop > Agent usage > View MCP connection settings."
                 }
                 ConnectionMode::Lan { .. } => "Check --endpoint and --token values.",
             };
@@ -445,10 +445,10 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
             401 => {
                 let advice = match &conn.mode {
                     ConnectionMode::Lan { saved: true, .. } => {
-                        "The saved LAN token was rejected. Copy the current token from Desktop > Settings > MCP\n    and run `linkly auth set-key <token> --lan --endpoint <url>`."
+                        "The saved LAN token was rejected. Copy the current token from Desktop > Agent usage > View MCP connection settings\n    and run `linkly auth set-key <token> --lan --endpoint <url>`."
                     }
                     ConnectionMode::Lan { .. } => {
-                        "Check your --token value (find it in Desktop > Settings > MCP)."
+                        "Check your --token value (find it in Desktop > Agent usage > View MCP connection settings)."
                     }
                     ConnectionMode::Remote => crate::key_rejected_hint!(),
                     _ => "Unexpected auth failure for local connection.",
@@ -460,7 +460,7 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
             }
             _ => {
                 let advice = if body.contains("disabled") {
-                    "Ask the Desktop owner to enable LAN access: Settings > MCP > LAN Access."
+                    "Ask the Desktop owner to turn on \"Allow LAN access\" on the Agent usage page."
                 } else {
                     "Check your credentials and permissions."
                 };
@@ -554,7 +554,7 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
                     None
                 } else {
                     Some(
-                        "Launch Linkly AI Desktop and enable \"MCP Connector\" in Settings > MCP."
+                        "Launch Linkly AI Desktop and turn on \"Allow local access\" on the Agent usage page."
                             .to_string(),
                     )
                 },

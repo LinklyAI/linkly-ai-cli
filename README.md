@@ -219,7 +219,7 @@ well. `--client <name>` overrides it.
 
 The bridge serves the desktop on this machine or the cloud gateway — it does not bridge to a
 desktop on the LAN. A client on another machine should connect to the desktop's LAN HTTP
-endpoint directly (copy the config from the desktop app's Settings → MCP), or bridge with
+endpoint directly (copy the config from the desktop app's Agent usage → View MCP connection settings), or bridge with
 `--remote`.
 
 ### Diagnose Connection Issues
@@ -352,7 +352,7 @@ linkly auth set-key lkai_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ### LAN mode setup
 
 ```bash
-# Save the LAN address and token once (both from the desktop app's Settings → MCP)
+# Save the LAN address and token once (both from the desktop app's Agent usage → View MCP connection settings)
 linkly auth set-key your_lan_token --lan --endpoint http://192.168.1.100:60606
 
 # Search the desktop on that device

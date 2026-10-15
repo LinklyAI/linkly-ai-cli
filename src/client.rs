@@ -449,11 +449,11 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
             let advice = match &conn.mode {
                 ConnectionMode::Local => "",
                 ConnectionMode::Lan { saved: true, .. } => {
-                    "\nThe saved LAN token was rejected. Copy the current token from Desktop > Settings > MCP\n\
+                    "\nThe saved LAN token was rejected. Copy the current token from Desktop > Agent usage > View MCP connection settings\n\
                      and run `linkly auth set-key <token> --lan --endpoint <url>`."
                 }
                 ConnectionMode::Lan { .. } => {
-                    "\nCheck your --token value (find it in Desktop > Settings > MCP)."
+                    "\nCheck your --token value (find it in Desktop > Agent usage > View MCP connection settings)."
                 }
                 ConnectionMode::Remote => concat!("\n", crate::key_rejected_hint!()),
             };
@@ -469,7 +469,7 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
             if body.contains("disabled") {
                 bail!(
                     "LAN access is disabled on the target machine.\n\
-                     Ask the Desktop owner to enable it: Settings > MCP > LAN Access.\n\n\
+                     Ask the Desktop owner to turn on \"Allow LAN access\" on the Agent usage page.\n\n\
                      {}",
                     hint
                 )

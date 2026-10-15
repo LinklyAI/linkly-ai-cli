@@ -64,7 +64,7 @@ fn lan_bridge_unsupported(endpoint: &str) -> String {
          machine (default) or the cloud gateway (--remote).\n\n\
          To reach a Desktop on your local network, use one of:\n  \
            1. Connect your MCP client to Desktop over HTTP — copy the LAN config from\n     \
-              Linkly AI Desktop > Settings > MCP:\n       \
+              Linkly AI Desktop > Agent usage > View MCP connection settings:\n       \
                 url:     {base}/mcp\n       \
                 headers: {{ \"Authorization\": \"Bearer <token>\" }}\n  \
            2. Bridge through the cloud gateway instead: linkly mcp --remote"

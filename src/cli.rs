@@ -78,7 +78,7 @@ pub struct ConnectionArgs {
     #[arg(long, requires = "token")]
     pub endpoint: Option<String>,
 
-    /// LAN access token for --endpoint (from Desktop > Settings > MCP)
+    /// LAN access token for --endpoint (from Desktop > Agent usage > View MCP connection settings)
     #[arg(long, requires = "endpoint")]
     pub token: Option<String>,
 }
@@ -446,7 +446,7 @@ Examples:
   linkly auth set-key lkai_xxx                                          # remote (default)
   linkly auth set-key <token> --lan --endpoint http://192.168.1.100:60606  # LAN (/mcp optional)
 
-Find the LAN address and token in Linkly AI Desktop > Settings > MCP.")]
+Find the LAN address and token in Linkly AI Desktop > Agent usage > View MCP connection settings.")]
     SetKey {
         /// API key (format: lkai_...), or with --lan the Desktop's LAN token
         key: String,

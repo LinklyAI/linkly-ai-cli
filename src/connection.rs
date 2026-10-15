@@ -154,7 +154,7 @@ pub fn resolve(
         let saved = read_lan_credentials()?.context(
             "No LAN connection saved.\n\n\
                  To set up:\n  \
-                   1. Find the LAN address and token in Linkly AI Desktop > Settings > MCP\n  \
+                   1. Find the LAN address and token in Linkly AI Desktop > Agent usage > View MCP connection settings\n  \
                    2. Run: linkly auth set-key <token> --lan --endpoint <url>\n\n\
                  Run `linkly doctor --lan` to diagnose LAN connection issues.",
         )?;
@@ -198,7 +198,7 @@ pub fn resolve(
                Local:   Launch Linkly AI Desktop on this machine\n  \
                Remote:  linkly <command> --remote  (sign in first: linkly auth login)\n  \
                LAN:     linkly <command> --lan  (save it first: linkly auth set-key <token> --lan --endpoint <url>;\n\
-             \x20          find the address and token in Desktop > Settings > MCP)\n\n\
+             \x20          find the address and token in Desktop > Agent usage > View MCP connection settings)\n\n\
              Run `linkly doctor` to diagnose local connection issues."
         )
     })?;
