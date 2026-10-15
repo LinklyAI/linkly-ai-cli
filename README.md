@@ -212,6 +212,11 @@ link the user named, e.g. when the Slot quota is full) — and the server instru
 describe that reach. The local bridge never advertises them: the desktop does not
 implement them, so the tool list matches what the upstream can actually serve.
 
+Calls through the bridge carry the name the connecting application gives itself when it
+connects (Claude Desktop, for example, says `claude-ai`), so Desktop's access log shows
+which application read the documents; with `--remote` the name is sent to the gateway as
+well. `--client <name>` overrides it.
+
 The bridge serves the desktop on this machine or the cloud gateway — it does not bridge to a
 desktop on the LAN. A client on another machine should connect to the desktop's LAN HTTP
 endpoint directly (copy the config from the desktop app's Settings → MCP), or bridge with
@@ -392,13 +397,15 @@ applications read their documents. `--client <name>` is how a call gets a name
 there; without it the entry shows only where the call came from (local, LAN,
 remote).
 
-**If you are an agent driving this CLI, always pass it** — including in the
-`linkly mcp` command line you are configured with:
+**If you are an agent driving this CLI, always pass it**:
 
 ```bash
 linkly search "budget report" --client claude-code
-linkly mcp --client cursor
 ```
+
+`linkly mcp` does not need it: the bridge uses the name the connecting application
+gives itself. Pass `--client` there only to override that name
+(`linkly mcp --client cursor`).
 
 It is a label, not a credential: it grants nothing and is never checked against
 anything, which is also why it cannot be made required — a person typing
@@ -406,17 +413,17 @@ commands in a terminal should not have to name themselves. Printable ASCII, up
 to 64 characters; anything else is ignored rather than rejected, so a bad value
 never fails a call.
 
-| Flag               | Scope  | Description                                                                                                       |
-| ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------- |
-| `--lan`            | LAN    | Connect to the LAN desktop saved by `auth set-key --lan` (conflicts with `--remote`, `--endpoint`)                |
-| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`                    |
-| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)                       |
-| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth login` or `auth set-key`) |
-| `--json`           | Global | One JSON object per result, errors included (for programs that parse the output)                                  |
-| `--exit-code`      | Global | Exit 0 = results, 1 = nothing matched (search, find-paths, grep, list), 2 = failed                                |
-| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it                           |
-| `-V, --version`    | Global | Print version                                                                                                     |
-| `-h, --help`       | Global | Print help                                                                                                        |
+| Flag               | Scope  | Description                                                                                                                                   |
+| ------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--lan`            | LAN    | Connect to the LAN desktop saved by `auth set-key --lan` (conflicts with `--remote`, `--endpoint`)                                            |
+| `--endpoint <url>` | LAN    | Connect to a specific MCP endpoint (e.g. `http://192.168.1.100:60606/mcp`), requires `--token`                                                |
+| `--token <token>`  | LAN    | Bearer token for LAN authentication (required with `--endpoint`, conflicts with `--remote`)                                                   |
+| `--remote`         | Remote | Connect via `https://mcp.linkly.ai` tunnel (conflicts with `--endpoint`, requires `auth login` or `auth set-key`)                             |
+| `--json`           | Global | One JSON object per result, errors included (for programs that parse the output)                                                              |
+| `--exit-code`      | Global | Exit 0 = results, 1 = nothing matched (search, find-paths, grep, list), 2 = failed                                                            |
+| `--client <name>`  | Global | Name the calling application, e.g. `--client claude-code`. Agents should always pass it; `linkly mcp` names its connecting application itself |
+| `-V, --version`    | Global | Print version                                                                                                                                 |
+| `-h, --help`       | Global | Print help                                                                                                                                    |
 
 ## Examples
 

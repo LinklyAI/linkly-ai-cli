@@ -58,6 +58,7 @@ pub struct Cli {
     /// It is a label, never a credential: it grants nothing and is never
     /// checked against anything. Printable ASCII, up to 64 characters; anything
     /// else is ignored rather than rejected, so a bad value never fails a call.
+    /// `linkly mcp` names the connecting application by itself; this overrides it.
     #[arg(long, global = true, value_name = "NAME", value_hint = clap::ValueHint::Other)]
     pub client: Option<String>,
 }
@@ -364,8 +365,9 @@ exit code reflects only it.")]
     ///
     /// For clients such as Claude Desktop. Default: the Linkly AI Desktop on
     /// this machine; --remote: the remote gateway (adds cloud:// libraries).
-    /// There is no LAN mode: LAN clients connect to Desktop over HTTP. Pass
-    /// --client <app-name> so the user can see who is calling.
+    /// There is no LAN mode: LAN clients connect to Desktop over HTTP. Calls
+    /// carry the connecting application's own name (with --remote, to the
+    /// gateway too); --client <app-name> overrides it.
     Mcp {
         /// Not supported: kept (hidden) only so that passing it fails with
         /// guidance instead of a bare "unexpected argument". LAN clients

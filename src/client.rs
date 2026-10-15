@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use reqwest::header::{HeaderName, HeaderValue};
@@ -7,9 +8,15 @@ use reqwest::header::{HeaderName, HeaderValue};
 use crate::connection::{ConnectionInfo, ConnectionMode, CLIENT_HEADER};
 use crate::version_check::check_desktop_version;
 use anyhow::{bail, Result};
-use rmcp::model::{CallToolRequestParams, ClientInfo, Content, Implementation, RawContent};
+use rmcp::model::{
+    CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, Content, Implementation, RawContent,
+};
 use rmcp::service::{RunningService, ServiceError};
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::common::client_side_sse::BoxedSseResponse;
+use rmcp::transport::streamable_http_client::{
+    StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
+    StreamableHttpPostResponse,
+};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
 
@@ -83,6 +90,81 @@ fn client_headers(client_name: Option<&str>) -> HashMap<HeaderName, HeaderValue>
     headers
 }
 
+/// The HTTP client the MCP transport sends through, plus a caller name that
+/// can be filled in after the session is already up.
+///
+/// `--client` is known before connecting and rides in the transport's fixed
+/// headers. The stdio bridge only learns the name of the application it
+/// serves from that application's `initialize`, which arrives after the
+/// upstream session exists — so that name goes in `caller` and is added to
+/// every request from then on. A `--client` header already present wins.
+#[derive(Clone)]
+struct CallerNamedHttp {
+    http: reqwest::Client,
+    caller: Arc<OnceLock<HeaderValue>>,
+}
+
+impl CallerNamedHttp {
+    fn with_caller(
+        &self,
+        mut headers: HashMap<HeaderName, HeaderValue>,
+    ) -> HashMap<HeaderName, HeaderValue> {
+        if let Some(name) = self.caller.get() {
+            headers
+                .entry(HeaderName::from_static(CLIENT_HEADER))
+                .or_insert_with(|| name.clone());
+        }
+        headers
+    }
+}
+
+impl StreamableHttpClient for CallerNamedHttp {
+    // Same error type as the plain reqwest client, so callers that inspect
+    // transport failures (HTTP status of a rejected call) see no difference.
+    type Error = reqwest::Error;
+
+    async fn post_message(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let headers = self.with_caller(custom_headers);
+        self.http
+            .post_message(uri, message, session_id, auth_header, headers)
+            .await
+    }
+
+    async fn delete_session(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<(), StreamableHttpError<Self::Error>> {
+        let headers = self.with_caller(custom_headers);
+        self.http
+            .delete_session(uri, session_id, auth_header, headers)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<BoxedSseResponse, StreamableHttpError<Self::Error>> {
+        let headers = self.with_caller(custom_headers);
+        self.http
+            .get_stream(uri, session_id, last_event_id, auth_header, headers)
+            .await
+    }
+}
+
 /// Timeout for MCP session initialization (serve / initialize handshake).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -109,6 +191,8 @@ impl ClientHandler for CliClientHandler {
 /// MCP client wrapping an rmcp RunningService.
 pub struct McpClient {
     service: RunningService<RoleClient, CliClientHandler>,
+    /// Shared with the transport's [`CallerNamedHttp`]; see [`Self::name_caller`].
+    caller: Arc<OnceLock<HeaderValue>>,
 }
 
 impl McpClient {
@@ -133,7 +217,13 @@ impl McpClient {
 
     async fn connect_inner(conn: &ConnectionInfo, check_version: bool) -> Result<Self> {
         preflight_check(conn, check_version).await?;
+        // `from_config` would use a bare `reqwest::Client` with no User-Agent.
+        Self::open_session(conn, crate::http::client_builder().build()?).await
+    }
 
+    /// Open the MCP session over `http`, with no pre-flight check. Outside
+    /// tests, go through [`Self::connect`] / [`Self::connect_passthrough`].
+    pub(crate) async fn open_session(conn: &ConnectionInfo, http: reqwest::Client) -> Result<Self> {
         let mut config = StreamableHttpClientTransportConfig::with_uri(&*conn.mcp_url);
         if let Some(header) = &conn.auth_header {
             let token = header.strip_prefix("Bearer ").unwrap_or(header);
@@ -141,9 +231,12 @@ impl McpClient {
         }
         config = config.custom_headers(client_headers(conn.client_name.as_deref()));
 
-        // `from_config` would use a bare `reqwest::Client` with no User-Agent.
+        let caller = Arc::new(OnceLock::new());
         let transport = StreamableHttpClientTransport::with_client(
-            crate::http::client_builder().build()?,
+            CallerNamedHttp {
+                http,
+                caller: caller.clone(),
+            },
             config,
         );
 
@@ -157,7 +250,7 @@ impl McpClient {
                 )
             })??;
 
-        Ok(Self { service })
+        Ok(Self { service, caller })
     }
 
     /// Test-only: run the client over any rmcp transport — an in-process pipe
@@ -170,7 +263,22 @@ impl McpClient {
         E: std::error::Error + Send + Sync + 'static,
     {
         let service = CliClientHandler.serve(transport).await?;
-        Ok(Self { service })
+        Ok(Self {
+            service,
+            caller: Arc::new(OnceLock::new()),
+        })
+    }
+
+    /// Name the application this connection works for, on every request from
+    /// now on — for when that name is only learned after connecting (the
+    /// stdio bridge learns it from its client's `initialize`). Only the first
+    /// name sticks, and a `--client` given at connect time keeps precedence.
+    /// A name that cannot be a header value is dropped, as in
+    /// [`client_headers`].
+    pub fn name_caller(&self, name: &str) {
+        if let Ok(value) = HeaderValue::from_str(name) {
+            let _ = self.caller.set(value);
+        }
     }
 
     /// Call a tool by name with JSON arguments, returning the text content.
@@ -404,10 +512,12 @@ fn extract_text(content: &[Content]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{client_headers, ToolError};
+    use super::{client_headers, CallerNamedHttp, ToolError};
     use crate::connection::CLIENT_HEADER;
-    use reqwest::header::HeaderName;
+    use reqwest::header::{HeaderName, HeaderValue};
     use rmcp::model::{ErrorCode, ErrorData};
+    use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock};
 
     #[test]
     fn a_named_caller_gets_the_header() {
@@ -430,6 +540,40 @@ mod tests {
         // sanitize_client_name should have caught this already; if something
         // slips through, the call still has to go out.
         assert!(client_headers(Some("bad\nvalue")).is_empty());
+    }
+
+    fn named(caller: Option<&str>) -> CallerNamedHttp {
+        let slot = Arc::new(OnceLock::new());
+        if let Some(name) = caller {
+            slot.set(HeaderValue::from_str(name).unwrap()).unwrap();
+        }
+        CallerNamedHttp {
+            http: reqwest::Client::new(),
+            caller: slot,
+        }
+    }
+
+    fn client_header(headers: &HashMap<HeaderName, HeaderValue>) -> Option<&str> {
+        headers
+            .get(&HeaderName::from_static(CLIENT_HEADER))
+            .map(|v| v.to_str().unwrap())
+    }
+
+    #[test]
+    fn a_caller_named_after_connecting_is_added_to_requests() {
+        let headers = named(Some("claude-ai")).with_caller(client_headers(None));
+        assert_eq!(client_header(&headers), Some("claude-ai"));
+    }
+
+    #[test]
+    fn a_client_flag_given_at_connect_time_keeps_precedence() {
+        let headers = named(Some("claude-ai")).with_caller(client_headers(Some("my-workflow")));
+        assert_eq!(client_header(&headers), Some("my-workflow"));
+    }
+
+    #[test]
+    fn no_caller_name_leaves_the_headers_alone() {
+        assert!(named(None).with_caller(client_headers(None)).is_empty());
     }
 
     #[test]
