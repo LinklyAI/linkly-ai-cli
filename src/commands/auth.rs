@@ -483,10 +483,10 @@ mod tests {
 
     #[test]
     fn mask_key_keeps_prefix_and_tail_only() {
-        let masked = mask_key("lkai_d9c64468ee2ebf9e2c16f36e2dc922a7");
-        assert_eq!(masked, "lkai_d9c6…22a7");
+        let masked = mask_key("lkai_0123456789abcdef0123456789abcdef");
+        assert_eq!(masked, "lkai_0123…cdef");
         // The middle of the secret must not survive masking.
-        assert!(!masked.contains("4468ee2ebf9e2c16f36e2dc9"));
+        assert!(!masked.contains("456789abcdef0123456789ab"));
     }
 
     #[test]
