@@ -189,6 +189,17 @@ mod tests {
         assert_eq!(classify(body, ResultShape::Search, true), Outcome::Found);
     }
 
+    // #161: results gained `matched_in` and the CLI prints the response
+    // verbatim — the only thing it reads is `total`, so an annotations-only
+    // hit classifies like any other and the new field survives untouched.
+    #[test]
+    fn json_search_results_carrying_matched_in_still_classify_by_total() {
+        let body = r#"{"query":"x","total":1,"results":[{"doc_id":"local://1","matched_in":["annotations"]}]}"#;
+        assert_eq!(classify(body, ResultShape::Search, true), Outcome::Found);
+        let none = r#"{"query":"x","scope":"annotations","total":0,"results":[]}"#;
+        assert_eq!(classify(none, ResultShape::Search, true), Outcome::Empty);
+    }
+
     #[test]
     fn json_grep_uses_total_matches() {
         assert_eq!(

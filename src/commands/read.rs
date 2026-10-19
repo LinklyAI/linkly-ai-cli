@@ -4,6 +4,7 @@ use crate::client::McpClient;
 use crate::connection::ConnectionInfo;
 use crate::output;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     client: &McpClient,
     conn: &ConnectionInfo,
@@ -11,6 +12,7 @@ pub async fn run(
     offset: Option<usize>,
     limit: Option<usize>,
     image_text: Option<String>,
+    annotations_offset: Option<usize>,
     json_mode: bool,
 ) -> Result<()> {
     // The `read` tool takes one document, so several IDs mean several calls.
@@ -30,6 +32,12 @@ pub async fn run(
         }
         if let Some(ref detail) = image_text {
             args["image_text"] = serde_json::json!(detail);
+        }
+        // #161: omitted means the desktop's default (0), and the desktop only
+        // appends the annotations block off the first page when the field is
+        // given explicitly — so an absent flag must stay absent, not become 0.
+        if let Some(annotations_offset) = annotations_offset {
+            args["annotations_offset"] = serde_json::json!(annotations_offset);
         }
         if json_mode {
             args["output_format"] = serde_json::json!("json");

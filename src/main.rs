@@ -338,14 +338,24 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             offset,
             limit,
             image_text,
+            annotations_offset,
             conn,
         } => {
             let ids = doc_ids::resolve(&ids)?;
             let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::read::run(&client, &conn, &ids, offset, limit, image_text, json_mode)
-                .await
-                .map(found)
+            commands::read::run(
+                &client,
+                &conn,
+                &ids,
+                offset,
+                limit,
+                image_text,
+                annotations_offset,
+                json_mode,
+            )
+            .await
+            .map(found)
         }
         Command::List {
             scope,
