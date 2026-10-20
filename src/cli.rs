@@ -317,7 +317,7 @@ pub enum Command {
         #[arg(long, value_parser = ["create", "edit"])]
         mode: String,
 
-        /// Markdown body without YAML front matter. Pass '-' to read the body from stdin
+        /// Markdown body without YAML front matter. Pass '-' to read the body from stdin. Inline #tags become the note's tags; write \#114 for a literal # that is not a tag (e.g. issue numbers)
         #[arg(long)]
         content: String,
 
