@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(classify(body, ResultShape::Search, true), Outcome::Found);
     }
 
-    // #161: results gained `matched_in` and the CLI prints the response
+    // Results gained `matched_in` (clip annotations) and the CLI prints the response
     // verbatim — the only thing it reads is `total`, so an annotations-only
     // hit classifies like any other and the new field survives untouched.
     #[test]

@@ -33,7 +33,7 @@ pub async fn run(
         if let Some(ref detail) = image_text {
             args["image_text"] = serde_json::json!(detail);
         }
-        // #161: omitted means the desktop's default (0), and the desktop only
+        // Omitted means the desktop's default (0), and the desktop only
         // appends the annotations block off the first page when the field is
         // given explicitly — so an absent flag must stay absent, not become 0.
         if let Some(annotations_offset) = annotations_offset {

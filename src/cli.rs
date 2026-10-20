@@ -608,7 +608,7 @@ mod tests {
     fn search_scope_accepts_the_documented_values() {
         assert!(parse(&["search", "q", "--scope", "notes"]).is_ok());
         assert!(parse(&["search", "q", "--scope", "folder"]).is_ok());
-        // #161: the annotations scope reaches the desktop verbatim.
+        // The annotations scope reaches the desktop verbatim.
         let cli = parse(&["search", "q", "--scope", "annotations"]).expect("parse");
         let Command::Search { scope, .. } = cli.command else {
             panic!("expected Search, got something else");
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn read_annotations_offset_is_an_optional_integer() {
-        // #161: absent means "desktop default" (0), so it must stay None
+        // Absent means "desktop default" (0), so it must stay None
         // rather than being sent as 0 — see read.rs on how args are built.
         let cli = parse(&["read", "local://1"]).expect("parse");
         let Command::Read {
