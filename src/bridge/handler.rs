@@ -71,17 +71,16 @@ impl StdioBridgeHandler {
     /// agent happened to call first. Errors deliberately never reach this
     /// path — a failure is read to find out what broke, and an unrelated
     /// advisory there only dilutes the signal.
-    fn finish(&self, content: String) -> CallToolResult {
-        let Some(notice) = crate::skills::hint() else {
-            return CallToolResult::success(vec![Content::text(content)]);
-        };
-        if self
-            .notice_sent
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            return CallToolResult::success(vec![Content::text(content)]);
-        }
-        CallToolResult::success(vec![Content::text(notice), Content::text(content)])
+    ///
+    /// The answer's own blocks pass through in order, so an image block that
+    /// `read` returns reaches the client after the text it belongs to.
+    fn finish(&self, content: Vec<Content>) -> CallToolResult {
+        let notice = crate::skills::hint().filter(|_| {
+            !self
+                .notice_sent
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        });
+        CallToolResult::success(with_notice(notice, content))
     }
 
     /// Turn an upstream call's outcome into this bridge's answer. A tool that
@@ -92,10 +91,29 @@ impl StdioBridgeHandler {
         outcome: anyhow::Result<String>,
         on_err: fn(anyhow::Error) -> McpError,
     ) -> Result<CallToolResult, McpError> {
+        self.forward_content(outcome.map(|text| vec![Content::text(text)]), on_err)
+    }
+
+    /// [`Self::forward`] for a call whose answer keeps every content block.
+    fn forward_content(
+        &self,
+        outcome: anyhow::Result<Vec<Content>>,
+        on_err: fn(anyhow::Error) -> McpError,
+    ) -> Result<CallToolResult, McpError> {
         match outcome {
             Ok(content) => Ok(self.finish(content)),
             Err(err) => tool_failure_result(&err).map_or_else(|| Err(on_err(err)), Ok),
         }
+    }
+}
+
+/// `content` led by the skills notice as its own block, when there is one to send.
+fn with_notice(notice: Option<&str>, content: Vec<Content>) -> Vec<Content> {
+    match notice {
+        None => content,
+        Some(notice) => std::iter::once(Content::text(notice))
+            .chain(content)
+            .collect(),
     }
 }
 
@@ -385,6 +403,18 @@ pub struct ReadInput {
         description = "Output format. Defaults to \"markdown\" (human-readable); set to \"json\" for structured JSON (machine-parseable). Sending `null` or omitting the field both yield the default."
     )]
     pub output_format: Option<String>,
+
+    /// Sent upstream only when true: an older Desktop rejects any field it does
+    /// not know — false and null included — so those stay off the wire.
+    #[serde(default, skip_serializing_if = "is_not_true")]
+    #[schemars(
+        description = "Return the image itself as an MCP image content block in addition to the text. Only applies to image documents (png / jpeg / bmp / webp); defaults to false. The image is resized (long edge at most 1568 px, about 1.15 megapixels), re-encoded and stripped of metadata before it is returned, and is attached only on the first page (offset=1). Requires a client that accepts image results. Omitting or null means false."
+    )]
+    pub include_image: Option<bool>,
+}
+
+fn is_not_true(value: &Option<bool>) -> bool {
+    *value != Some(true)
 }
 
 // SYNC: ExploreInput must match desktop's src/mcp/schemas.rs::ExploreInput
@@ -736,7 +766,7 @@ impl StdioBridgeHandler {
     #[tool(
         name = "read",
         annotations(read_only_hint = true),
-        description = "[Workflow: search → grep or outline → read] Read content of a document by its ID. Supports line-based pagination: use `offset` to start from a specific line number and `limit` to control how many lines to read. Returns content with line numbers. Results include a \"Referenced images in shown range\" mapping that resolves markdown image refs to indexed image documents (doc_id + text excerpt); control detail with the optional `image_text` parameter (\"none\" / \"abstract\" / \"full\"). For long documents, prefer using outline or grep first to identify target sections, then read specific ranges.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count. Characters covers the whole available body, not just the returned lines, and is partial while OCR/ASR is pending or extraction was truncated.\n\nFor a Markdown clip that carries user annotations (highlights, notes and comments written in the clip reader), a \"User annotations\" block follows the content on the first content page (`offset`=1) or whenever `annotations_offset` is given; annotations page independently of the lines (20 per call, 20000-character budget) and the block reports `total`, `has_more` and `next_annotations_offset`. Pass `limit=1` with `annotations_offset` to page annotations only."
+        description = "[Workflow: search → grep or outline → read] Read content of a document by its ID. Supports line-based pagination: use `offset` to start from a specific line number and `limit` to control how many lines to read. Returns content with line numbers. Results include a \"Referenced images in shown range\" mapping that resolves markdown image refs to indexed image documents (doc_id + text excerpt); control detail with the optional `image_text` parameter (\"none\" / \"abstract\" / \"full\"). For image documents, pass include_image=true to receive the image itself as an image content block (resized, about 1,600 tokens); the text result always says whether an image is available. For long documents, prefer using outline or grep first to identify target sections, then read specific ranges.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count. Characters covers the whole available body, not just the returned lines, and is partial while OCR/ASR is pending or extraction was truncated.\n\nFor a Markdown clip that carries user annotations (highlights, notes and comments written in the clip reader), a \"User annotations\" block follows the content on the first content page (`offset`=1) or whenever `annotations_offset` is given; annotations page independently of the lines (20 per call, 20000-character budget) and the block reports `total`, `has_more` and `next_annotations_offset`. Pass `limit=1` with `annotations_offset` to page annotations only."
     )]
     async fn read(
         &self,
@@ -745,8 +775,11 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("read", args, &self.conn).await;
-        self.forward(outcome, flat_bridge_error)
+        let outcome = self
+            .client
+            .call_tool_content("read", args, &self.conn)
+            .await;
+        self.forward_content(outcome, flat_bridge_error)
     }
 
     #[tool(
@@ -1196,6 +1229,72 @@ mod tests {
             obj.keys().collect::<Vec<_>>(),
             vec!["content", "mode"],
             "only `mode` and `content` should be forwarded, got: {obj:?}"
+        );
+    }
+
+    // An older Desktop rejects `include_image` whatever its value, so only
+    // `true` — the one value that needs a new Desktop anyway — is forwarded.
+    #[test]
+    fn read_forwards_include_image_only_when_true() {
+        let keys = |args: serde_json::Value| {
+            let input: ReadInput = serde_json::from_value(args).expect("parses");
+            let value = serde_json::to_value(&input).unwrap();
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            keys(serde_json::json!({ "doc_id": "local://1" })),
+            vec!["doc_id"]
+        );
+        assert_eq!(
+            keys(serde_json::json!({ "doc_id": "local://1", "include_image": null })),
+            vec!["doc_id"]
+        );
+        assert_eq!(
+            keys(serde_json::json!({ "doc_id": "local://1", "include_image": false })),
+            vec!["doc_id"]
+        );
+        assert_eq!(
+            keys(serde_json::json!({ "doc_id": "local://1", "include_image": true })),
+            vec!["doc_id", "include_image"]
+        );
+        assert!(serde_json::from_value::<ReadInput>(
+            serde_json::json!({ "doc_id": "local://1", "include_image": "true" })
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn read_schema_lets_strict_clients_send_null_include_image() {
+        let schema = serde_json::to_value(schemars::schema_for!(ReadInput)).unwrap();
+        let ty = &schema["properties"]["include_image"]["type"];
+        let types: Vec<&str> = ty
+            .as_array()
+            .expect("include_image type is a list")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            types.contains(&"boolean") && types.contains(&"null"),
+            "{ty}"
+        );
+    }
+
+    #[test]
+    fn the_notice_leads_and_every_answer_block_follows_in_order() {
+        let answer = vec![Content::text("doc"), Content::image("AAAA", "image/png")];
+        let out = with_notice(Some("notice"), answer.clone());
+        let kinds: Vec<serde_json::Value> = out
+            .iter()
+            .map(|c| serde_json::to_value(c).unwrap()["type"].clone())
+            .collect();
+        assert_eq!(kinds, vec!["text", "text", "image"]);
+        assert_eq!(out[0].as_text().unwrap().text, "notice");
+        assert_eq!(with_notice(None, answer.clone()).len(), 2);
+        assert_eq!(
+            serde_json::to_value(&with_notice(None, answer.clone())[1]).unwrap()["mimeType"],
+            "image/png"
         );
     }
 

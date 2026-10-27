@@ -288,6 +288,20 @@ impl McpClient {
         args: serde_json::Value,
         conn: &ConnectionInfo,
     ) -> Result<String> {
+        Ok(extract_text(
+            &self.call_tool_content(name, args, conn).await?,
+        ))
+    }
+
+    /// Call a tool by name with JSON arguments, returning every content block —
+    /// images included (`read` with `include_image`). A failed tool call
+    /// still comes back as `ToolFailure` carrying its text.
+    pub async fn call_tool_content(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        conn: &ConnectionInfo,
+    ) -> Result<Vec<Content>> {
         // Convert Value to JsonObject (Map<String, Value>)
         let arguments = match args {
             serde_json::Value::Object(map) => Some(map),
@@ -328,7 +342,7 @@ impl McpClient {
             .into());
         }
 
-        Ok(extract_text(&result.content))
+        Ok(result.content)
     }
 
     /// List available tools from the MCP server (used by doctor for round-trip check).
