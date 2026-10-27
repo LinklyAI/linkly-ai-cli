@@ -121,6 +121,16 @@ pub enum Command {
     },
 
     /// Search indexed documents by keywords
+    #[command(after_help = "\
+Examples:
+  linkly search \"attention\" --library my-research
+  linkly search \"todo\" --scope notes --tags project
+  linkly search \"source unclear\" --scope annotations     # only your clip annotations
+
+Your own clip annotations (highlights, notes, comments from the clip reader)
+are searched by default; each result says in `matched_in` whether it hit the
+content, the annotations or both, and Markdown marks such snippets with
+\"(in annotations)\".")]
     Search {
         /// Search query
         query: String,
@@ -153,7 +163,7 @@ pub enum Command {
         #[arg(long, value_parser = ["default", "newest", "oldest"])]
         time_sort: Option<String>,
 
-        /// Search scope: 'folder' (default) searches all indexed content; 'notes' restricts results to your markdown notes and IGNORES --library and --path-glob
+        /// Search scope: 'folder' (default) searches all indexed content, your clip annotations included; 'notes' restricts results to your markdown notes and IGNORES --library and --path-glob; 'annotations' matches only the text of your own clip annotations (keyword-only, no field:value clauses), so only documents carrying annotations are returned — the other filters still apply
         #[arg(long, value_hint = clap::ValueHint::Other)]
         scope: Option<String>,
 
@@ -225,6 +235,17 @@ pub enum Command {
     },
 
     /// Read document content by ID
+    #[command(after_help = "\
+Examples:
+  linkly read local://42
+  linkly read local://42 --offset 201 --limit 200
+  linkly read local://42 --annotations-offset 20 --limit 1   # next page of annotations only
+
+For a Markdown clip that carries your annotations (highlights, notes and
+comments from the clip reader), a \"User annotations\" block follows the
+content on the first page (--offset 1) or whenever --annotations-offset is
+given. Annotations page independently of the lines: 20 per call, and the
+block reports total, has_more and next_annotations_offset.")]
     Read {
         /// Document IDs from search. Pass '-' to read the IDs from stdin, one per line
         #[arg(required = true)]
@@ -241,6 +262,10 @@ pub enum Command {
         /// Detail for the referenced-images block: 'none' (mapping only), 'abstract' (default: plus excerpt and word count), 'full' (plus inline OCR text)
         #[arg(long, value_parser = ["none", "abstract", "full"])]
         image_text: Option<String>,
+
+        /// Offset into the document's user annotations (0-based, default 0). The "User annotations" block is appended on the first content page (--offset 1) or whenever this flag is given, 20 annotations per call; pass --limit 1 to page annotations only
+        #[arg(long, value_name = "N")]
+        annotations_offset: Option<usize>,
 
         #[command(flatten)]
         conn: ConnectionArgs,
@@ -583,6 +608,52 @@ mod tests {
     fn search_scope_accepts_the_documented_values() {
         assert!(parse(&["search", "q", "--scope", "notes"]).is_ok());
         assert!(parse(&["search", "q", "--scope", "folder"]).is_ok());
+        // The annotations scope reaches the desktop verbatim.
+        let cli = parse(&["search", "q", "--scope", "annotations"]).expect("parse");
+        let Command::Search { scope, .. } = cli.command else {
+            panic!("expected Search, got something else");
+        };
+        assert_eq!(scope.as_deref(), Some("annotations"));
+    }
+
+    #[test]
+    fn read_annotations_offset_is_an_optional_integer() {
+        // Absent means "desktop default" (0), so it must stay None
+        // rather than being sent as 0 — see read.rs on how args are built.
+        let cli = parse(&["read", "local://1"]).expect("parse");
+        let Command::Read {
+            annotations_offset, ..
+        } = cli.command
+        else {
+            panic!("expected Read, got something else");
+        };
+        assert_eq!(annotations_offset, None);
+
+        let cli = parse(&[
+            "read",
+            "local://1",
+            "--annotations-offset",
+            "20",
+            "--limit",
+            "1",
+        ])
+        .expect("parse");
+        let Command::Read {
+            annotations_offset,
+            limit,
+            ..
+        } = cli.command
+        else {
+            panic!("expected Read, got something else");
+        };
+        assert_eq!(annotations_offset, Some(20));
+        assert_eq!(limit, Some(1));
+
+        // 0-based offset: 0 is a valid first page; negatives and words are not.
+        assert!(parse(&["read", "local://1", "--annotations-offset", "0"]).is_ok());
+        assert!(parse(&["read", "local://1", "--annotations-offset", "-1"]).is_err());
+        assert!(parse(&["read", "local://1", "--annotations-offset", "twenty"]).is_err());
+        assert!(parse(&["read", "local://1", "--annotations-offset"]).is_err());
     }
 
     #[test]
