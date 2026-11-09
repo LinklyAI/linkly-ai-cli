@@ -339,6 +339,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             limit,
             image_text,
             annotations_offset,
+            image,
             conn,
         } => {
             let ids = doc_ids::resolve(&ids)?;
@@ -352,6 +353,7 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
                 limit,
                 image_text,
                 annotations_offset,
+                image,
                 json_mode,
             )
             .await
