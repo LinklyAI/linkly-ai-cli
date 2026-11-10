@@ -217,7 +217,7 @@ pub struct ListLibrariesInput {}
 #[serde(deny_unknown_fields)]
 pub struct SearchInput {
     #[schemars(
-        description = "Search keywords or natural-language phrases. Unfiltered searches use hybrid BM25 + vector retrieval. When a backend cannot apply requested filters before ANN Top-K, it uses winner-first BM25 instead so filtered-out rows cannot consume the candidate window. A query that is a number, such as an ID or a tax or phone number (`98.765.432/0001-10`), runs keyword search only on the Desktop; a cloud library may still run semantic search for it."
+        description = "Search keywords or natural-language phrases. Unfiltered searches use hybrid BM25 + vector retrieval. When a backend cannot apply requested filters before ANN Top-K, it uses winner-first BM25 instead so filtered-out rows cannot consume the candidate window. A query that is only a number of six or more digits, such as an ID or a tax or phone number (`98.765.432/0001-10`), runs keyword search only on the Desktop; a shorter number, or one with a word, runs both, and a cloud library may still run semantic search for it."
     )]
     pub query: String,
 
@@ -734,7 +734,7 @@ impl StdioBridgeHandler {
     #[tool(
         name = "search",
         annotations(read_only_hint = true),
-        description = "[Workflow: search → grep or outline → read] Search indexed documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets.\n\nAfter finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest. When the user names a container by a fuzzy or cross-language word (\"WeChat\", \"Notion notes\"), call `find_paths` first to discover what `path_glob` to pass.\n\n**Scope**: omit `library` to search across your **local** indexed content (default — Desktop tunnel must be online; cloud libraries are NOT included). Pass `library=\"local://<id>\"` to scope to one local library, or `library=\"cloud://<owner>/<slug>\"` to query a linked cloud library. To search across cloud libraries, call `list_libraries` first to see what is available, then call `search` once per cloud library.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count.\n\nUser annotations: the user's own highlights, notes and comments on clips are searched too. Each result carries `matched_in` (\"content\" and/or \"annotations\"); the Markdown output marks such snippets with \"(in annotations)\". Pass `scope=\"annotations\"` to search only the annotation text (keyword-only, no field-qualified clauses).\n\nMatch source: each result carries `matched_by`: \"keyword\" (keyword search found it), \"both\" (keyword and semantic search), or \"semantic\" (only semantic search found it; it may not contain the query's words, so treat it as weaker evidence). A query that is a number, such as an ID or a tax or phone number, runs keyword search only. Both hold for Desktop results only: cloud:// results do not carry `matched_by`, and a number query on a cloud library may still run semantic search."
+        description = "[Workflow: search → grep or outline → read] Search indexed documents by keywords or phrases. Returns the most relevant documents with titles, paths, types, and text snippets.\n\nAfter finding target documents, use 'outline' to get summaries in batch or 'grep' to find specific patterns, then use 'read' to read specific sections of interest. When the user names a container by a fuzzy or cross-language word (\"WeChat\", \"Notion notes\"), call `find_paths` first to discover what `path_glob` to pass.\n\n**Scope**: omit `library` to search across your **local** indexed content (default — Desktop tunnel must be online; cloud libraries are NOT included). Pass `library=\"local://<id>\"` to scope to one local library, or `library=\"cloud://<owner>/<slug>\"` to query a linked cloud library. To search across cloud libraries, call `list_libraries` first to see what is available, then call `search` once per cloud library.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count.\n\nUser annotations: the user's own highlights, notes and comments on clips are searched too. Each result carries `matched_in` (\"content\" and/or \"annotations\"); the Markdown output marks such snippets with \"(in annotations)\". Pass `scope=\"annotations\"` to search only the annotation text (keyword-only, no field-qualified clauses).\n\nMatch source: each result carries `matched_by`: \"keyword\" (keyword search found it), \"both\" (keyword and semantic search), or \"semantic\" (only semantic search found it; it may not contain the query's words, so treat it as weaker evidence). A query that is only a number of six or more digits, such as an ID or a tax or phone number, runs keyword search only, so it gets no semantic-only hits; separators (`.,-/()+`, spaces) and up to two letters in a row may be part of it. A shorter number such as a year, or a number with a word (`CNPJ 98.765.432/0001-10`), runs both searches. Both hold for Desktop results only: cloud:// results do not carry `matched_by`, and a number query on a cloud library may still run semantic search."
     )]
     async fn search(
         &self,
@@ -1195,39 +1195,67 @@ mod tests {
     // Same contract as above: `matched_by` and the keyword-only number queries,
     // which hold for Desktop results only.
     #[test]
-    fn search_advertises_match_source_and_number_queries() {
-        for is_remote in [false, true] {
-            let router = StdioBridgeHandler::build_router(is_remote);
-            let search = router.get("search").expect("search advertised");
-            let desc = search.description.as_deref().unwrap_or_default();
-            assert!(
-                desc.contains("each result carries `matched_by`"),
-                "remote={is_remote}: {desc}"
-            );
-            assert!(
-                desc.contains("runs keyword search only"),
-                "remote={is_remote}: {desc}"
-            );
-            assert!(
-                desc.contains("cloud:// results do not carry `matched_by`"),
-                "remote={is_remote}: {desc}"
-            );
-            let schema = serde_json::to_value(&search.input_schema).unwrap();
-            let query = schema["properties"]["query"]["description"]
-                .as_str()
-                .expect("query description");
-            assert!(
-                query.contains("runs keyword search only on the Desktop"),
-                "{query}"
-            );
-            let scope = schema["properties"]["scope"]["description"]
-                .as_str()
-                .expect("scope description");
-            assert!(
-                scope.contains("`matched_by` says which search did"),
-                "{scope}"
-            );
-        }
+    fn search_advertises_match_source_and_number_queries_locally() {
+        let router = StdioBridgeHandler::build_router(false);
+        let search = router.get("search").expect("search advertised");
+        let desc = search.description.as_deref().unwrap_or_default();
+        assert!(desc.contains("each result carries `matched_by`"), "{desc}");
+        assert!(
+            desc.contains("only a number of six or more digits"),
+            "{desc}"
+        );
+        assert!(desc.contains("runs keyword search only"), "{desc}");
+        assert!(
+            desc.contains("cloud:// results do not carry `matched_by`"),
+            "{desc}"
+        );
+        let schema = serde_json::to_value(&search.input_schema).unwrap();
+        let query = schema["properties"]["query"]["description"]
+            .as_str()
+            .expect("query description");
+        assert!(
+            query.contains("runs keyword search only on the Desktop"),
+            "{query}"
+        );
+        let scope = schema["properties"]["scope"]["description"]
+            .as_str()
+            .expect("scope description");
+        assert!(
+            scope.contains("`matched_by` says which search did"),
+            "{scope}"
+        );
+    }
+
+    #[test]
+    fn search_advertises_match_source_and_number_queries_remotely() {
+        let router = StdioBridgeHandler::build_router(true);
+        let search = router.get("search").expect("search advertised");
+        let desc = search.description.as_deref().unwrap_or_default();
+        assert!(desc.contains("each result carries `matched_by`"), "{desc}");
+        assert!(
+            desc.contains("only a number of six or more digits"),
+            "{desc}"
+        );
+        assert!(desc.contains("runs keyword search only"), "{desc}");
+        assert!(
+            desc.contains("cloud:// results do not carry `matched_by`"),
+            "{desc}"
+        );
+        let schema = serde_json::to_value(&search.input_schema).unwrap();
+        let query = schema["properties"]["query"]["description"]
+            .as_str()
+            .expect("query description");
+        assert!(
+            query.contains("runs keyword search only on the Desktop"),
+            "{query}"
+        );
+        let scope = schema["properties"]["scope"]["description"]
+            .as_str()
+            .expect("scope description");
+        assert!(
+            scope.contains("`matched_by` says which search did"),
+            "{scope}"
+        );
     }
 
     // `None` must be omitted from the forwarded arguments, not sent as `null`

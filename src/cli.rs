@@ -134,8 +134,9 @@ content, the annotations or both, and Markdown marks such snippets with
 
 Each result also says in `matched_by` which search found it: keyword, both
 or semantic. A semantic-only hit may not contain your words; weigh it less.
-On the Desktop, a query that is a number (an ID, a tax or phone number) runs
-keyword search only. cloud:// results carry no `matched_by`.")]
+On the Desktop, a query that is only a number of six or more digits (an ID,
+a tax or phone number) runs keyword search only; a shorter number such as a
+year, or one with a word, runs both. cloud:// results carry no `matched_by`.")]
     Search {
         /// Search query
         query: String,
