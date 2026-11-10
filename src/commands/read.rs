@@ -173,11 +173,14 @@ fn images_dir() -> PathBuf {
         .join("images")
 }
 
-/// Write an image block's base64 `data` to `<dir>/<doc id>-<image id>.<ext>`,
-/// replacing a file already there, and return the path. Characters other than
-/// ASCII letters and digits become `_` in the name. Written to a temp file in
-/// the same directory and renamed over the target, so a reader never sees half
-/// an image.
+/// Write an image block's base64 `data` to
+/// `<dir>/<doc id>-<image id>-<digest>.<ext>` and return the path. The digest of
+/// the bytes keeps two images with the same IDs apart (document 42 on another
+/// Desktop, a document extracted again), so a path printed earlier keeps
+/// showing what it showed; the same image lands on the same name. Characters
+/// other than ASCII letters and digits become `_` in the name. Written to a temp
+/// file in the same directory and renamed over the target, so a reader never
+/// sees half an image.
 fn save_image(
     dir: &Path,
     doc_id: &str,
@@ -204,7 +207,19 @@ fn save_image(
     };
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
-    let path = dir.join(format!("{}-{}.{ext}", safe(doc_id), safe(image)));
+    // Only has to tell images apart, so std's hasher will do, though its values
+    // may change between Rust releases.
+    let digest = {
+        use std::hash::Hasher;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hasher.write(&bytes);
+        hasher.finish()
+    };
+    let path = dir.join(format!(
+        "{}-{}-{digest:016x}.{ext}",
+        safe(doc_id),
+        safe(image)
+    ));
     let mut tmp = tempfile::Builder::new()
         .prefix(".image-")
         .suffix(".tmp")
@@ -223,24 +238,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_image_is_saved_under_its_document_and_id() {
+    fn an_image_is_saved_under_its_document_id_and_content() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("images");
         let data = base64::engine::general_purpose::STANDARD.encode(b"jpeg bytes");
 
         let path = save_image(&dir, "local://42", "p3-1", &data, "image/jpeg").unwrap();
 
-        assert_eq!(path, dir.join("local___42-p3_1.jpg"));
+        assert_eq!(path.parent(), Some(dir.as_path()));
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let digest = name
+            .strip_prefix("local___42-p3_1-")
+            .and_then(|rest| rest.strip_suffix(".jpg"))
+            .unwrap();
+        assert!(digest.len() == 16 && digest.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(std::fs::read(&path).unwrap(), b"jpeg bytes");
 
-        // The same image again replaces the file, and leaves no temp file behind.
-        let again = base64::engine::general_purpose::STANDARD.encode(b"newer");
+        // The same image again lands on the same file, and leaves no temp file behind.
         assert_eq!(
-            save_image(&dir, "local://42", "p3-1", &again, "image/jpeg").unwrap(),
+            save_image(&dir, "local://42", "p3-1", &data, "image/jpeg").unwrap(),
             path
         );
-        assert_eq!(std::fs::read(&path).unwrap(), b"newer");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+        // Another image with the same IDs (document 42 on another Desktop) gets a
+        // file of its own: the path printed for the first still shows the first.
+        let other = base64::engine::general_purpose::STANDARD.encode(b"another desktop");
+        let other_path = save_image(&dir, "local://42", "p3-1", &other, "image/jpeg").unwrap();
+        assert_ne!(other_path, path);
+        assert_eq!(std::fs::read(&path).unwrap(), b"jpeg bytes");
+        assert_eq!(std::fs::read(&other_path).unwrap(), b"another desktop");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
     }
 
     #[test]
