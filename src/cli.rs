@@ -130,7 +130,12 @@ Examples:
 Your own clip annotations (highlights, notes, comments from the clip reader)
 are searched by default; each result says in `matched_in` whether it hit the
 content, the annotations or both, and Markdown marks such snippets with
-\"(in annotations)\".")]
+\"(in annotations)\".
+
+Each result also says in `matched_by` which search found it: keyword, both
+or semantic. A semantic-only hit may not contain your words; weigh it less.
+On the Desktop, a query that is a number (an ID, a tax or phone number) runs
+keyword search only. cloud:// results carry no `matched_by`.")]
     Search {
         /// Search query
         query: String,

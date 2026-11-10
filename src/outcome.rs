@@ -189,12 +189,13 @@ mod tests {
         assert_eq!(classify(body, ResultShape::Search, true), Outcome::Found);
     }
 
-    // Results gained `matched_in` (clip annotations) and the CLI prints the response
-    // verbatim — the only thing it reads is `total`, so an annotations-only
-    // hit classifies like any other and the new field survives untouched.
+    // Results gained `matched_in` (clip annotations) and `matched_by` (which search
+    // found them), and the CLI prints the response verbatim — the only thing it
+    // reads is `total`, so such a hit classifies like any other and the new fields
+    // survive untouched.
     #[test]
     fn json_search_results_carrying_matched_in_still_classify_by_total() {
-        let body = r#"{"query":"x","total":1,"results":[{"doc_id":"local://1","matched_in":["annotations"]}]}"#;
+        let body = r#"{"query":"x","total":1,"results":[{"doc_id":"local://1","matched_in":["annotations"],"matched_by":"keyword"}]}"#;
         assert_eq!(classify(body, ResultShape::Search, true), Outcome::Found);
         let none = r#"{"query":"x","scope":"annotations","total":0,"results":[]}"#;
         assert_eq!(classify(none, ResultShape::Search, true), Outcome::Empty);
