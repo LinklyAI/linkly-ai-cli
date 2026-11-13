@@ -411,6 +411,13 @@ pub struct ReadInput {
         description = "Return the image itself as an MCP image content block in addition to the text. Only applies to image documents (png / jpeg / bmp / webp); defaults to false. The image is resized (long edge at most 1568 px, about 1.15 megapixels), re-encoded and stripped of metadata before it is returned, and is attached only on the first page (offset=1). Requires a client that accepts image results. Omitting or null means false."
     )]
     pub include_image: Option<bool>,
+
+    /// Sent upstream only when set, for the same reason as `include_image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "ID of an image inside this document, as shown in its placeholders such as [Image p3-1] (page 3, first image). Returns only that image (resized, metadata stripped) and any text printed in it; offset and limit are ignored. Local documents only. null = omitted."
+    )]
+    pub image: Option<String>,
 }
 
 fn is_not_true(value: &Option<bool>) -> bool {
@@ -766,7 +773,7 @@ impl StdioBridgeHandler {
     #[tool(
         name = "read",
         annotations(read_only_hint = true),
-        description = "[Workflow: search → grep or outline → read] Read content of a document by its ID. Supports line-based pagination: use `offset` to start from a specific line number and `limit` to control how many lines to read. Returns content with line numbers. Results include a \"Referenced images in shown range\" mapping that resolves markdown image refs to indexed image documents (doc_id + text excerpt); control detail with the optional `image_text` parameter (\"none\" / \"abstract\" / \"full\"). For image documents, pass include_image=true to receive the image itself as an image content block (resized, about 1,600 tokens); the text result always says whether an image is available. For long documents, prefer using outline or grep first to identify target sections, then read specific ranges.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count. Characters covers the whole available body, not just the returned lines, and is partial while OCR/ASR is pending or extraction was truncated.\n\nFor a Markdown clip that carries user annotations (highlights, notes and comments written in the clip reader), a \"User annotations\" block follows the content on the first content page (`offset`=1) or whenever `annotations_offset` is given; annotations page independently of the lines (20 per call, 20000-character budget) and the block reports `total`, `has_more` and `next_annotations_offset`. Pass `limit=1` with `annotations_offset` to page annotations only."
+        description = "[Workflow: search → grep or outline → read] Read content of a document by its ID. Supports line-based pagination: use `offset` to start from a specific line number and `limit` to control how many lines to read. Returns content with line numbers. Results include a \"Referenced images in shown range\" mapping that resolves markdown image refs to indexed image documents (doc_id + text excerpt); control detail with the optional `image_text` parameter (\"none\" / \"abstract\" / \"full\"). For image documents, pass include_image=true to receive the image itself as an image content block (resized, about 1,600 tokens); the text result always says whether an image is available. Images inside a scanned PDF appear as [Image p3-1]; pass image=\"p3-1\" to see one (one image per call). For long documents, prefer using outline or grep first to identify target sections, then read specific ranges.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count. Characters covers the whole available body, not just the returned lines, and is partial while OCR/ASR is pending or extraction was truncated.\n\nFor a Markdown clip that carries user annotations (highlights, notes and comments written in the clip reader), a \"User annotations\" block follows the content on the first content page (`offset`=1) or whenever `annotations_offset` is given; annotations page independently of the lines (20 per call, 20000-character budget) and the block reports `total`, `has_more` and `next_annotations_offset`. Pass `limit=1` with `annotations_offset` to page annotations only."
     )]
     async fn read(
         &self,
@@ -1263,6 +1270,44 @@ mod tests {
             serde_json::json!({ "doc_id": "local://1", "include_image": "true" })
         )
         .is_err());
+    }
+
+    // Same for `image`: an older Desktop rejects the key itself, so null stays
+    // off the wire and only an ID is forwarded.
+    #[test]
+    fn read_forwards_image_only_when_set() {
+        let keys = |args: serde_json::Value| {
+            let input: ReadInput = serde_json::from_value(args).expect("parses");
+            let value = serde_json::to_value(&input).unwrap();
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            keys(serde_json::json!({ "doc_id": "local://1", "image": null })),
+            vec!["doc_id"]
+        );
+        assert_eq!(
+            keys(serde_json::json!({ "doc_id": "local://1", "image": "p3-1" })),
+            vec!["doc_id", "image"]
+        );
+        assert!(serde_json::from_value::<ReadInput>(
+            serde_json::json!({ "doc_id": "local://1", "image": 3 })
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn read_schema_lets_strict_clients_send_null_image() {
+        let schema = serde_json::to_value(schemars::schema_for!(ReadInput)).unwrap();
+        let ty = &schema["properties"]["image"]["type"];
+        let types: Vec<&str> = ty
+            .as_array()
+            .expect("image type is a list")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(types.contains(&"string") && types.contains(&"null"), "{ty}");
     }
 
     #[test]

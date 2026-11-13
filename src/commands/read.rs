@@ -1,4 +1,8 @@
-use anyhow::Result;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use base64::Engine as _;
+use rmcp::model::RawContent;
 
 use crate::client::McpClient;
 use crate::connection::ConnectionInfo;
@@ -13,8 +17,16 @@ pub async fn run(
     limit: Option<usize>,
     image_text: Option<String>,
     annotations_offset: Option<usize>,
+    image: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
+    if let Some(image) = image {
+        let [id] = ids else {
+            return output::print_error("--image takes exactly one document ID", json_mode);
+        };
+        return read_image(client, conn, id, &image, json_mode).await;
+    }
+
     // The `read` tool takes one document, so several IDs mean several calls.
     // Sequentially: the desktop is a single local process and the point here is
     // pipeability, not throughput.
@@ -89,4 +101,189 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// `read` with `image`: one image from inside the document. The text is printed
+/// as usual; the image, which a terminal cannot show, is saved to a file and its
+/// path printed (`image_file` in JSON). When no image came back, the text says
+/// why and is printed alone.
+async fn read_image(
+    client: &McpClient,
+    conn: &ConnectionInfo,
+    id: &str,
+    image: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let mut args = serde_json::json!({ "doc_id": id, "image": image });
+    if json_mode {
+        args["output_format"] = serde_json::json!("json");
+    }
+    let content = match client.call_tool_content("read", args, conn).await {
+        Ok(content) => content,
+        Err(e) => return output::print_tool_error(&e, json_mode),
+    };
+    let text = content
+        .iter()
+        .filter_map(|block| match &block.raw {
+            RawContent::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let image_block = content.iter().find_map(|block| match &block.raw {
+        RawContent::Image(image) => Some(image),
+        _ => None,
+    });
+    let saved = match image_block {
+        Some(block) => match save_image(&images_dir(), id, image, &block.data, &block.mime_type) {
+            Ok(path) => Some(path),
+            Err(e) => {
+                return output::print_error(&format!("Could not save the image: {e:#}"), json_mode)
+            }
+        },
+        None => None,
+    };
+
+    if json_mode {
+        let mut data: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({ "content": text }));
+        if let (Some(obj), Some(path)) = (data.as_object_mut(), &saved) {
+            obj.insert(
+                "image_file".to_string(),
+                serde_json::json!(path.to_string_lossy()),
+            );
+        }
+        output::print_result(&data.to_string(), true);
+    } else {
+        output::print_result(&text, false);
+        if let Some(path) = &saved {
+            println!("Image saved to: {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Where saved images go: `<user cache dir>/linkly-ai/images`, so they never land
+/// in a temp directory other users can write to; the temp directory only when the
+/// platform has no cache directory.
+fn images_dir() -> PathBuf {
+    dirs::cache_dir()
+        .map(|dir| dir.join("linkly-ai"))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("images")
+}
+
+/// Write an image block's base64 `data` to
+/// `<dir>/<doc id>-<image id>-<digest>.<ext>` and return the path. The digest of
+/// the bytes keeps two images with the same IDs apart (document 42 on another
+/// Desktop, a document extracted again), so a path printed earlier keeps
+/// showing what it showed; the same image lands on the same name. Characters
+/// other than ASCII letters and digits become `_` in the name. Written to a temp
+/// file in the same directory and renamed over the target, so a reader never
+/// sees half an image.
+fn save_image(
+    dir: &Path,
+    doc_id: &str,
+    image: &str,
+    data: &str,
+    mime_type: &str,
+) -> Result<PathBuf> {
+    use std::io::Write;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .context("the image data is not valid base64")?;
+    let ext = match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "img",
+    };
+    let safe = |s: &str| -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
+    };
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
+    // Only has to tell images apart, so std's hasher will do, though its values
+    // may change between Rust releases.
+    let digest = {
+        use std::hash::Hasher;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hasher.write(&bytes);
+        hasher.finish()
+    };
+    let path = dir.join(format!(
+        "{}-{}-{digest:016x}.{ext}",
+        safe(doc_id),
+        safe(image)
+    ));
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".image-")
+        .suffix(".tmp")
+        .tempfile_in(dir)
+        .with_context(|| format!("Failed to create a temp file in {}", dir.display()))?;
+    tmp.write_all(&bytes)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    tmp.persist(&path)
+        .map_err(|e| e.error)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_image_is_saved_under_its_document_id_and_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("images");
+        let data = base64::engine::general_purpose::STANDARD.encode(b"jpeg bytes");
+
+        let path = save_image(&dir, "local://42", "p3-1", &data, "image/jpeg").unwrap();
+
+        assert_eq!(path.parent(), Some(dir.as_path()));
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let digest = name
+            .strip_prefix("local___42-p3_1-")
+            .and_then(|rest| rest.strip_suffix(".jpg"))
+            .unwrap();
+        assert!(digest.len() == 16 && digest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(std::fs::read(&path).unwrap(), b"jpeg bytes");
+
+        // The same image again lands on the same file, and leaves no temp file behind.
+        assert_eq!(
+            save_image(&dir, "local://42", "p3-1", &data, "image/jpeg").unwrap(),
+            path
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+
+        // Another image with the same IDs (document 42 on another Desktop) gets a
+        // file of its own: the path printed for the first still shows the first.
+        let other = base64::engine::general_purpose::STANDARD.encode(b"another desktop");
+        let other_path = save_image(&dir, "local://42", "p3-1", &other, "image/jpeg").unwrap();
+        assert_ne!(other_path, path);
+        assert_eq!(std::fs::read(&path).unwrap(), b"jpeg bytes");
+        assert_eq!(std::fs::read(&other_path).unwrap(), b"another desktop");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn the_extension_follows_the_mime_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(b"x");
+        let png = save_image(tmp.path(), "local://1", "p1-1", &data, "image/png").unwrap();
+        assert_eq!(png.extension().unwrap(), "png");
+        let other = save_image(tmp.path(), "local://1", "p1-2", &data, "image/heic").unwrap();
+        assert_eq!(other.extension().unwrap(), "img");
+    }
+
+    #[test]
+    fn data_that_is_not_base64_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(save_image(tmp.path(), "local://1", "p1-1", "not base64!", "image/png").is_err());
+    }
 }

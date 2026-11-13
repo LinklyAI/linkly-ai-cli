@@ -240,6 +240,7 @@ Examples:
   linkly read local://42
   linkly read local://42 --offset 201 --limit 200
   linkly read local://42 --annotations-offset 20 --limit 1   # next page of annotations only
+  linkly read local://42 --image p3-1   # save the image shown as [Image p3-1] to a file
 
 For a Markdown clip that carries your annotations (highlights, notes and
 comments from the clip reader), a \"User annotations\" block follows the
@@ -266,6 +267,10 @@ block reports total, has_more and next_annotations_offset.")]
         /// Offset into the document's user annotations (0-based, default 0). The "User annotations" block is appended on the first content page (--offset 1) or whenever this flag is given, 20 annotations per call; pass --limit 1 to page annotations only
         #[arg(long, value_name = "N")]
         annotations_offset: Option<usize>,
+
+        /// ID of an image inside the document, as its placeholder shows it (p3-1 for [Image p3-1]). Saves that image to a file and prints where, with any text printed in it; takes exactly one document ID
+        #[arg(long, value_name = "ID")]
+        image: Option<String>,
 
         #[command(flatten)]
         conn: ConnectionArgs,
@@ -654,6 +659,22 @@ mod tests {
         assert!(parse(&["read", "local://1", "--annotations-offset", "-1"]).is_err());
         assert!(parse(&["read", "local://1", "--annotations-offset", "twenty"]).is_err());
         assert!(parse(&["read", "local://1", "--annotations-offset"]).is_err());
+    }
+
+    #[test]
+    fn read_image_is_an_optional_id() {
+        let cli = parse(&["read", "local://1"]).expect("parse");
+        let Command::Read { image, .. } = cli.command else {
+            panic!("expected Read, got something else");
+        };
+        assert_eq!(image, None);
+
+        let cli = parse(&["read", "local://1", "--image", "p3-1"]).expect("parse");
+        let Command::Read { image, .. } = cli.command else {
+            panic!("expected Read, got something else");
+        };
+        assert_eq!(image.as_deref(), Some("p3-1"));
+        assert!(parse(&["read", "local://1", "--image"]).is_err());
     }
 
     #[test]
