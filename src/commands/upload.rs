@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::output;
+use crate::{http, output};
 
 /// Every upload address starts with this.
 const UPLOAD_PREFIX: &str = "https://api.linkly.ai/v1/uploads/";
@@ -46,38 +46,10 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
             json_mode,
         );
     }
-    let size = match tokio::fs::metadata(file).await {
-        Ok(meta) if meta.is_file() => meta.len(),
-        Ok(_) => return output::print_error(&format!("{} is not a file", file.display()), json_mode),
-        Err(e) => return output::print_error(&format!("Cannot read {}: {e}", file.display()), json_mode),
+    let (status, text) = match send(address, file).await {
+        Ok(answer) => answer,
+        Err(message) => return output::print_error(&message, json_mode),
     };
-    let handle = match tokio::fs::File::open(file).await {
-        Ok(handle) => handle,
-        Err(e) => return output::print_error(&format!("Cannot read {}: {e}", file.display()), json_mode),
-    };
-    let client = reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(UPLOAD_TIMEOUT)
-        .user_agent(concat!("linkly-cli/", env!("CARGO_PKG_VERSION")))
-        .build()?;
-    let response = match client
-        .put(address)
-        .header(reqwest::header::CONTENT_LENGTH, size)
-        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-        .body(reqwest::Body::from(handle))
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(e) => {
-            return output::print_error(
-                &format!("Upload failed: {}. Retry the same command: the address takes the file again until it succeeds.", e.without_url()),
-                json_mode,
-            )
-        }
-    };
-    let status = response.status();
-    let text = response.text().await.unwrap_or_default();
     let answer: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     if !status.is_success() {
         let message = answer
@@ -89,13 +61,56 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
         return output::print_error(&format!("{code}: {message}"), json_mode);
     }
     if json_mode {
-        output::print_result(&text, true);
+        // The answer's own `status` (published, needs_confirmation,
+        // awaiting_publish, superseded) is the result: printed as it came.
+        output::print_answer(&text);
     } else {
         // The answer's `message` says what happened and what to tell the user.
         let message = answer.get("message").and_then(|m| m.as_str()).unwrap_or(&text);
         println!("{message}");
     }
     Ok(())
+}
+
+/// PUT `file` to `address`: the endpoint's status and its whole answer, or
+/// what to tell the user when there is none.
+async fn send(address: &str, file: &Path) -> Result<(reqwest::StatusCode, String), String> {
+    let size = match tokio::fs::metadata(file).await {
+        Ok(meta) if meta.is_file() => meta.len(),
+        Ok(_) => return Err(format!("{} is not a file", file.display())),
+        Err(e) => return Err(format!("Cannot read {}: {e}", file.display())),
+    };
+    let handle = tokio::fs::File::open(file)
+        .await
+        .map_err(|e| format!("Cannot read {}: {e}", file.display()))?;
+    let client = http::client_builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(UPLOAD_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Upload failed: {e}"))?;
+    let response = client
+        .put(address)
+        .header(reqwest::header::CONTENT_LENGTH, size)
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(reqwest::Body::from(handle))
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "Upload failed: {}. Retry the same command: the address takes the file again until it succeeds.",
+                e.without_url()
+            )
+        })?;
+    let status = response.status();
+    // Cut off on the way back, the answer is lost, not the upload: the same
+    // command is answered again.
+    let text = response.text().await.map_err(|e| {
+        format!(
+            "The upload's answer was cut off: {}. Retry the same command: the address answers again.",
+            e.without_url()
+        )
+    })?;
+    Ok((status, text))
 }
 
 #[cfg(test)]
@@ -119,5 +134,72 @@ mod tests {
         ] {
             assert!(!is_upload_address(address), "{address}");
         }
+    }
+
+    /// Reads one request off `socket`: head, then the body up to Content-Length.
+    async fn read_request(socket: &mut tokio::net::TcpStream) {
+        use tokio::io::AsyncReadExt;
+        let mut request = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        let (start, length) = loop {
+            let n = socket.read(&mut buf).await.unwrap();
+            request.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap()))
+                    .unwrap_or(0);
+                break (end + 4, length);
+            }
+        };
+        while request.len() < start + length {
+            let n = socket.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+        }
+    }
+
+    /// A server that takes one upload and writes `response` back.
+    async fn answer_once(response: &'static [u8]) -> String {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request(&mut socket).await;
+            socket.write_all(response).await.unwrap();
+        });
+        format!("http://{addr}/v1/uploads/upl_test")
+    }
+
+    fn temp_file(bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, bytes).unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn an_answer_cut_off_on_the_way_back_is_a_failure_to_retry() {
+        let file = temp_file(b"hello pages");
+        let url = answer_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{\"status\":").await;
+
+        let error = send(&url, file.path()).await.unwrap_err();
+
+        assert!(error.starts_with("The upload's answer was cut off"), "{error}");
+        assert!(error.contains("Retry the same command"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_whole_answer_comes_back_as_sent() {
+        let file = temp_file(b"hello pages");
+        let url = answer_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 31\r\nconnection: close\r\n\r\n{\"status\":\"needs_confirmation\"}").await;
+
+        let (status, text) = send(&url, file.path()).await.expect("answered");
+
+        assert_eq!(status, reqwest::StatusCode::OK);
+        assert_eq!(text, r#"{"status":"needs_confirmation"}"#);
     }
 }
