@@ -1052,7 +1052,8 @@ impl StdioBridgeHandler {
             \n  - file_path: absolute path of the file. This tool does not read the file. It \
             returns an upload address; upload the raw bytes there with an HTTP PUT and the Page \
             goes live. Through the Linkly AI desktop app, sharing the same absolute path again \
-            updates the Page made from it; otherwise pass url to update.\
+            (outside temporary folders) updates the Page made from it; otherwise pass url to \
+            update.\
             \n  - content + content_type (markdown | html): send the text itself, for agents that \
             cannot run commands. Without url this always creates a new Page.\
             \n  Saving new content never changes who can open the Page; use update for that.\
