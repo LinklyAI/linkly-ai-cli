@@ -371,6 +371,76 @@ block reports total, has_more and next_annotations_offset.")]
         conn: ConnectionArgs,
     },
 
+    /// Publish a file or text as a Linkly AI Page; get, update, list or delete your Pages
+    ///
+    /// Pages live at https://<username>.linklyai.page/<slug>. A save with
+    /// --file-path answers with an upload address: send the file with
+    /// `linkly upload <address> <file>`. Public Pages can be opened by anyone and
+    /// may appear in search engines; private and password Pages need Pro, and
+    /// passwords are made only at linkly.ai
+    Pages {
+        /// What to do: save, list, get, update or delete
+        #[arg(long, value_parser = ["save", "list", "get", "update", "delete"])]
+        action: String,
+
+        /// save: absolute path of the file to publish (Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG)
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        file_path: Option<String>,
+
+        /// save: the Markdown or HTML text itself instead of a file; '-' reads it from stdin. Needs --content-type
+        #[arg(long)]
+        content: Option<String>,
+
+        /// save with --content: markdown or html
+        #[arg(long, value_parser = ["markdown", "html"])]
+        content_type: Option<String>,
+
+        /// save, update: the Page title
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        title: Option<String>,
+
+        /// save, update: one sentence about the Page
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        description: Option<String>,
+
+        /// Who can open it: public or private (Pro); update also takes password (Pro). save sets it only on a new Page
+        #[arg(long, value_parser = ["public", "private", "password"])]
+        access: Option<String>,
+
+        /// Link of one of your Pages. Required for get, update and delete; with save it names the Page to replace
+        #[arg(long, value_hint = clap::ValueHint::Url)]
+        url: Option<String>,
+
+        /// save with --url: publish an upload held for possible credentials, only after the user agreed
+        #[arg(long)]
+        confirm_sensitive: bool,
+
+        /// list: how many Pages to return (default 20, max 100)
+        #[arg(long)]
+        limit: Option<u32>,
+
+        /// list: how many Pages to skip
+        #[arg(long)]
+        offset: Option<u32>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Upload a file to a Linkly AI Pages upload address
+    ///
+    /// The address comes from `linkly pages --action save --file-path …`. Sends the
+    /// raw bytes with an HTTP PUT; retrying the same command is safe until the
+    /// address expires (30 minutes)
+    Upload {
+        /// The upload address (https://api.linkly.ai/v1/uploads/upl_…)
+        address: String,
+
+        /// The file to send
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: std::path::PathBuf,
+    },
+
     /// Show Desktop status: version, indexed documents, index state (gateway and tunnel with --remote)
     Status {
         #[command(flatten)]

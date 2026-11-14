@@ -34,8 +34,16 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
     // Desktop) is using us, instead of being intercepted on the way in.
     let client = McpClient::connect_passthrough(&conn).await?;
 
+    // Advertise `pages` only when the upstream does — it follows the
+    // account's Linkly AI Pages switch there, and an older Desktop has none.
+    let pages = client
+        .list_tools()
+        .await
+        .map(|names| names.iter().any(|name| name == "pages"))
+        .unwrap_or(false);
+
     // Create the bridge handler and serve over stdio
-    let handler = StdioBridgeHandler::new(client, conn);
+    let handler = StdioBridgeHandler::with_pages(client, conn, pages);
     let stdio = (tokio::io::stdin(), tokio::io::stdout());
     let service = handler.serve(stdio).await?;
 

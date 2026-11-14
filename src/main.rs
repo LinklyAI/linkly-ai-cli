@@ -422,6 +422,44 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .await
             .map(found)
         }
+        Command::Pages {
+            action,
+            file_path,
+            content,
+            content_type,
+            title,
+            description,
+            access,
+            url,
+            confirm_sensitive,
+            limit,
+            offset,
+            conn,
+        } => {
+            let conn = resolve_conn(&conn, client)?;
+            let client = client::McpClient::connect(&conn).await?;
+            commands::pages::run(
+                &client,
+                &conn,
+                commands::pages::PagesParams {
+                    action,
+                    file_path,
+                    content,
+                    content_type,
+                    title,
+                    description,
+                    access,
+                    url,
+                    confirm_sensitive,
+                    limit,
+                    offset,
+                },
+                json_mode,
+            )
+            .await
+            .map(found)
+        }
+        Command::Upload { address, file } => commands::upload::run(&address, &file, json_mode).await.map(found),
     }
 }
 
