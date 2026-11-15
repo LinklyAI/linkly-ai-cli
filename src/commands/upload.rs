@@ -60,6 +60,12 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
         let code = answer.get("error").and_then(|c| c.as_str()).unwrap_or("upload_failed");
         return output::print_error(&format!("{code}: {message}"), json_mode);
     }
+    if !is_upload_answer(&answer) {
+        return output::print_error(
+            "The upload's answer could not be read. Retry the same command: the address answers again.",
+            json_mode,
+        );
+    }
     if json_mode {
         // The answer's own `status` (published, needs_confirmation,
         // awaiting_publish, superseded) is the result: printed as it came.
@@ -70,6 +76,12 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
         println!("{message}");
     }
     Ok(())
+}
+
+/// Whether a successful PUT's body is the endpoint's answer: an object with
+/// its `status`. Anything else was garbled on the way.
+fn is_upload_answer(answer: &serde_json::Value) -> bool {
+    answer.get("status").and_then(|status| status.as_str()).is_some()
 }
 
 /// PUT `file` to `address`: the endpoint's status and its whole answer, or
@@ -134,6 +146,14 @@ mod tests {
         ] {
             assert!(!is_upload_address(address), "{address}");
         }
+    }
+
+    #[test]
+    fn only_an_object_with_a_status_is_an_upload_answer() {
+        assert!(is_upload_answer(&serde_json::json!({ "status": "published", "url": "https://a.linklyai.page/x" })));
+        assert!(!is_upload_answer(&serde_json::Value::Null));
+        assert!(!is_upload_answer(&serde_json::json!(["published"])));
+        assert!(!is_upload_answer(&serde_json::json!({ "message": "Uploaded." })));
     }
 
     /// Reads one request off `socket`: head, then the body up to Content-Length.
