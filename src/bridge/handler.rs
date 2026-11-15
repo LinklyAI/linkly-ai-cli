@@ -2392,6 +2392,19 @@ mod tests {
     /// carried. Returns the `/mcp` URL. The header can only be observed on
     /// the wire, so unlike [`FakeGateway`] this one speaks real HTTP.
     async fn fake_http_upstream() -> (String, ClientHeaderLog) {
+        fake_http_upstream_with(ToolList::Answered).await
+    }
+
+    /// How the fake upstream answers `tools/list`.
+    #[derive(Clone, Copy, PartialEq)]
+    enum ToolList {
+        /// With `search` and `pages`.
+        Answered,
+        /// Never, on the first session only: the request stays open.
+        NeverOnFirstSession,
+    }
+
+    async fn fake_http_upstream_with(tool_list: ToolList) -> (String, ClientHeaderLog) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -2467,6 +2480,26 @@ mod tests {
                                     "jsonrpc": "2.0",
                                     "id": body["id"],
                                     "result": result
+                                })
+                                .to_string();
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nMcp-Session-Id: fake-session\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                                    reply.len()
+                                )
+                            }
+                            "tools/list" => {
+                                let first_list = recorded.lock().unwrap().iter().filter(|(m, _)| m == "tools/list").count() == 1;
+                                if tool_list == ToolList::NeverOnFirstSession && first_list {
+                                    // Holds the request open, as a stuck upstream would.
+                                    std::future::pending::<()>().await;
+                                }
+                                let reply = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": body["id"],
+                                    "result": { "tools": [
+                                        { "name": "search", "inputSchema": { "type": "object" } },
+                                        { "name": "pages", "inputSchema": { "type": "object" } }
+                                    ] }
                                 })
                                 .to_string();
                                 format!(
@@ -2621,5 +2654,49 @@ mod tests {
         let seen = log.lock().unwrap().clone();
         assert_eq!(client_header_on(&seen, "initialize"), None);
         assert_eq!(client_header_on(&seen, "tools/call"), None);
+    }
+
+    /// The upstream's tool list says whether the bridge offers `pages`, and
+    /// the bridge serves through the session that answered.
+    #[tokio::test]
+    async fn the_bridge_offers_pages_when_the_upstream_lists_it() {
+        let (mcp_url, log) = fake_http_upstream().await;
+        let conn = local_connection(&mcp_url, None);
+        let first = connect_to_fake(&conn).await;
+
+        let (client, pages) = crate::commands::mcp::probe_pages(first, std::time::Duration::from_secs(5), || async {
+            panic!("a session that answered is kept")
+        })
+        .await
+        .expect("a client to serve with");
+        client.call_tool("search", serde_json::json!({ "query": "notes" }), &conn).await.expect("the search goes through");
+
+        assert!(pages);
+        let initialized = log.lock().unwrap().iter().filter(|(method, _)| method == "initialize").count();
+        assert_eq!(initialized, 1);
+    }
+
+    /// A tool list that never answers leaves its session stuck behind it — the
+    /// transport waits for one answer at a time — so the bridge serves through
+    /// a new session, without `pages`, and tool calls still reach the upstream.
+    #[tokio::test]
+    async fn after_a_tool_list_that_never_answers_tool_calls_still_reach_the_upstream() {
+        let (mcp_url, log) = fake_http_upstream_with(ToolList::NeverOnFirstSession).await;
+        let conn = local_connection(&mcp_url, None);
+        let first = connect_to_fake(&conn).await;
+
+        let (client, pages) =
+            crate::commands::mcp::probe_pages(first, std::time::Duration::from_millis(200), || async { Ok(connect_to_fake(&conn).await) })
+                .await
+                .expect("a client to serve with");
+        let searched = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.call_tool("search", serde_json::json!({ "query": "notes" }), &conn),
+        )
+        .await;
+
+        assert!(!pages);
+        assert!(matches!(searched, Ok(Ok(_))), "the search reaches the upstream: {searched:?}");
+        assert!(log.lock().unwrap().iter().any(|(method, _)| method == "tools/call"));
     }
 }

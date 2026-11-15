@@ -38,7 +38,7 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
 
     // Advertise `pages` only when the upstream does — it follows the
     // account's Linkly AI Pages switch there, and an older Desktop has none.
-    let pages = offers_pages(client.list_tools(), PAGES_PROBE_TIMEOUT).await;
+    let (client, pages) = probe_pages(client, PAGES_PROBE_TIMEOUT, || McpClient::connect_passthrough(&conn)).await?;
 
     // Create the bridge handler and serve over stdio
     let handler = StdioBridgeHandler::with_pages(client, conn, pages);
@@ -66,16 +66,23 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
 /// offers `pages`: the client that started the bridge is waiting too.
 const PAGES_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Whether the upstream's tool list has `pages`. A list that fails or does not
-/// come within `deadline` counts as no: the bridge starts without it rather
-/// than not at all.
-async fn offers_pages(
-    list: impl std::future::Future<Output = Result<Vec<String>>>,
-    deadline: Duration,
-) -> bool {
-    match tokio::time::timeout(deadline, list).await {
-        Ok(Ok(names)) => names.iter().any(|name| name == "pages"),
-        Ok(Err(_)) | Err(_) => false,
+/// The client to serve through, and whether the upstream's tool list has
+/// `pages`. A list that fails or does not come within `deadline` counts as no,
+/// and leaves its session possibly stuck: the transport sends one request at
+/// a time and waits for each answer, so every later call would queue behind
+/// it. The bridge then serves through a new session from `reconnect`.
+pub(crate) async fn probe_pages<F, Fut>(client: McpClient, deadline: Duration, reconnect: F) -> Result<(McpClient, bool)>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<McpClient>>,
+{
+    let listed = tokio::time::timeout(deadline, client.list_tools()).await;
+    match listed {
+        Ok(Ok(names)) => Ok((client, names.iter().any(|name| name == "pages"))),
+        Ok(Err(_)) | Err(_) => {
+            drop(client);
+            Ok((reconnect().await?, false))
+        }
     }
 }
 
@@ -109,26 +116,5 @@ mod tests {
         assert!(msg.contains("not supported"), "{msg}");
         assert!(msg.contains("http://10.255.255.1:60606/mcp"), "{msg}");
         assert!(msg.contains("linkly mcp --remote"), "{msg}");
-    }
-
-    #[tokio::test]
-    async fn pages_is_offered_when_the_upstream_lists_it() {
-        let list = async { Ok(vec!["search".to_string(), "pages".to_string()]) };
-        assert!(offers_pages(list, Duration::from_secs(1)).await);
-    }
-
-    #[tokio::test]
-    async fn an_upstream_without_pages_or_with_a_failing_list_offers_none() {
-        assert!(!offers_pages(async { Ok(vec!["search".to_string()]) }, Duration::from_secs(1)).await);
-        assert!(!offers_pages(async { Err(anyhow::anyhow!("offline")) }, Duration::from_secs(1)).await);
-    }
-
-    /// A list that never answers must not keep the bridge from starting.
-    #[tokio::test]
-    async fn a_list_that_never_answers_counts_as_no_pages() {
-        let started = std::time::Instant::now();
-        let offered = offers_pages(std::future::pending(), Duration::from_millis(50)).await;
-        assert!(!offered);
-        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
