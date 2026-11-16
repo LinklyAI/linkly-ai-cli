@@ -459,7 +459,9 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .await
             .map(found)
         }
-        Command::Upload { address, file } => commands::upload::run(&address, &file, json_mode).await.map(found),
+        Command::Upload { address, file } => commands::upload::run(&address, &file, json_mode)
+            .await
+            .map(found),
     }
 }
 

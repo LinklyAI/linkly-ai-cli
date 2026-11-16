@@ -684,14 +684,17 @@ pub struct PagesInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "\
-        save with url: set true only after the user explicitly agreed to \
-        publish a Page that was held because it seems to contain credentials \
-        or personal data. null = omitted.\
+        save with url: only after the user explicitly agreed to publish a \
+        held upload (one that seems to contain credentials or personal data): \
+        the version given in the answer that asked, like \"a1b2c3d4e5f6\". \
+        Publishes exactly that upload. null = omitted.\
     ")]
-    pub confirm_sensitive: Option<bool>,
+    pub confirm_sensitive: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(description = "list: how many Pages to return, default 20, max 100. null = omitted.")]
+    #[schemars(
+        description = "list: how many Pages to return, default 20, max 100. null = omitted."
+    )]
     pub limit: Option<u32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1689,12 +1692,26 @@ mod tests {
             assert_eq!(annotations.title.as_deref(), Some("pages"));
             assert_eq!(annotations.destructive_hint, Some(true));
             assert_eq!(annotations.open_world_hint, Some(true));
-            let props = tool.input_schema["properties"].as_object().expect("properties");
+            let props = tool.input_schema["properties"]
+                .as_object()
+                .expect("properties");
             let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
             keys.sort();
             assert_eq!(
                 keys,
-                vec!["access", "action", "confirm_sensitive", "content", "content_type", "description", "file_path", "limit", "offset", "title", "url"]
+                vec![
+                    "access",
+                    "action",
+                    "confirm_sensitive",
+                    "content",
+                    "content_type",
+                    "description",
+                    "file_path",
+                    "limit",
+                    "offset",
+                    "title",
+                    "url"
+                ]
             );
             assert_eq!(
                 props["action"]["enum"],
@@ -1702,15 +1719,38 @@ mod tests {
             );
         }
         let explicit_null: PagesInput =
-            serde_json::from_str(r#"{"action":"list","limit":null,"url":null}"#).expect("null optionals parse");
-        assert_eq!(serde_json::to_value(explicit_null).unwrap(), serde_json::json!({"action": "list"}));
+            serde_json::from_str(r#"{"action":"list","limit":null,"url":null}"#)
+                .expect("null optionals parse");
+        assert_eq!(
+            serde_json::to_value(explicit_null).unwrap(),
+            serde_json::json!({"action": "list"})
+        );
+    }
+
+    /// A confirmation names the held upload's version and goes on as it came;
+    /// a bare true is refused here, as the gateway refuses it.
+    #[test]
+    fn pages_input_confirms_by_version_not_true() {
+        let version: PagesInput = serde_json::from_str(
+            r#"{"action":"save","url":"https://alicia.linklyai.page/q3","confirm_sensitive":"a1b2c3d4e5f6"}"#,
+        )
+        .expect("a version parses");
+        assert_eq!(
+            serde_json::to_value(version).unwrap()["confirm_sensitive"],
+            serde_json::json!("a1b2c3d4e5f6")
+        );
+        assert!(serde_json::from_str::<PagesInput>(
+            r#"{"action":"save","url":"https://alicia.linklyai.page/q3","confirm_sensitive":true}"#
+        )
+        .is_err());
     }
 
     #[test]
     fn instructions_mention_pages_only_with_it() {
         assert!(!instructions(false, false).contains("'pages'"));
         assert!(!instructions(true, false).contains("'pages'"));
-        assert!(instructions(false, true).contains("'note_save' and 'pages' are the only tools here that write"));
+        assert!(instructions(false, true)
+            .contains("'note_save' and 'pages' are the only tools here that write"));
         let remote = instructions(true, true);
         assert!(remote.contains("Linkly AI Pages: 'pages' publishes"));
         assert!(remote.find("Linkly AI Pages:").unwrap() < remote.find("Decision guide:").unwrap());
@@ -2137,7 +2177,10 @@ mod tests {
         .await
         .expect("initialize finishes well within the budget")
         .expect("the bridge client initializes against the fake gateway");
-        (StdioBridgeHandler::with_pages(client, remote_connection(), false), seen)
+        (
+            StdioBridgeHandler::with_pages(client, remote_connection(), false),
+            seen,
+        )
     }
 
     /// The last tools/call the fake gateway received, as the JSON the bridge
@@ -2664,15 +2707,24 @@ mod tests {
         let conn = local_connection(&mcp_url, None);
         let first = connect_to_fake(&conn).await;
 
-        let (client, pages) = crate::commands::mcp::probe_pages(first, std::time::Duration::from_secs(5), || async {
-            panic!("a session that answered is kept")
-        })
-        .await
-        .expect("a client to serve with");
-        client.call_tool("search", serde_json::json!({ "query": "notes" }), &conn).await.expect("the search goes through");
+        let (client, pages) =
+            crate::commands::mcp::probe_pages(first, std::time::Duration::from_secs(5), || async {
+                panic!("a session that answered is kept")
+            })
+            .await
+            .expect("a client to serve with");
+        client
+            .call_tool("search", serde_json::json!({ "query": "notes" }), &conn)
+            .await
+            .expect("the search goes through");
 
         assert!(pages);
-        let initialized = log.lock().unwrap().iter().filter(|(method, _)| method == "initialize").count();
+        let initialized = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, _)| method == "initialize")
+            .count();
         assert_eq!(initialized, 1);
     }
 
@@ -2685,10 +2737,13 @@ mod tests {
         let conn = local_connection(&mcp_url, None);
         let first = connect_to_fake(&conn).await;
 
-        let (client, pages) =
-            crate::commands::mcp::probe_pages(first, std::time::Duration::from_millis(200), || async { Ok(connect_to_fake(&conn).await) })
-                .await
-                .expect("a client to serve with");
+        let (client, pages) = crate::commands::mcp::probe_pages(
+            first,
+            std::time::Duration::from_millis(200),
+            || async { Ok(connect_to_fake(&conn).await) },
+        )
+        .await
+        .expect("a client to serve with");
         let searched = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             client.call_tool("search", serde_json::json!({ "query": "notes" }), &conn),
@@ -2696,7 +2751,14 @@ mod tests {
         .await;
 
         assert!(!pages);
-        assert!(matches!(searched, Ok(Ok(_))), "the search reaches the upstream: {searched:?}");
-        assert!(log.lock().unwrap().iter().any(|(method, _)| method == "tools/call"));
+        assert!(
+            matches!(searched, Ok(Ok(_))),
+            "the search reaches the upstream: {searched:?}"
+        );
+        assert!(log
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, _)| method == "tools/call"));
     }
 }

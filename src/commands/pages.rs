@@ -29,7 +29,7 @@ pub struct PagesParams {
     pub description: Option<String>,
     pub access: Option<String>,
     pub url: Option<String>,
-    pub confirm_sensitive: bool,
+    pub confirm_sensitive: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -63,7 +63,10 @@ fn arguments(params: &PagesParams, content: Option<String>) -> serde_json::Value
     set("description", params.description.clone().map(Into::into));
     set("access", params.access.clone().map(Into::into));
     set("url", params.url.clone().map(Into::into));
-    set("confirm_sensitive", params.confirm_sensitive.then_some(true.into()));
+    set(
+        "confirm_sensitive",
+        params.confirm_sensitive.clone().map(Into::into),
+    );
     set("limit", params.limit.map(Into::into));
     set("offset", params.offset.map(Into::into));
     args
@@ -95,10 +98,11 @@ const NO_PAGES_TOOL: &str = "This connection has no pages tool. Update the Linkl
      to the latest version; if it is up to date, Linkly AI Pages is not available for this account.";
 
 fn is_unknown_tool(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<crate::client::ToolError>().is_some_and(|e| {
-        let message = e.message.to_ascii_lowercase();
-        message.contains("tool not found") || message.contains("unknown tool")
-    })
+    err.downcast_ref::<crate::client::ToolError>()
+        .is_some_and(|e| {
+            let message = e.message.to_ascii_lowercase();
+            message.contains("tool not found") || message.contains("unknown tool")
+        })
 }
 
 #[cfg(test)]
@@ -115,7 +119,7 @@ mod tests {
             description: None,
             access: None,
             url: None,
-            confirm_sensitive: false,
+            confirm_sensitive: None,
             limit: None,
             offset: None,
         }
@@ -132,13 +136,16 @@ mod tests {
         );
         let mut confirm = params("save");
         confirm.url = Some("https://alicia.linklyai.page/q3-k2m4".into());
-        confirm.confirm_sensitive = true;
+        confirm.confirm_sensitive = Some("a1b2c3d4e5f6".into());
         assert_eq!(
             arguments(&confirm, None),
-            serde_json::json!({"action": "save", "url": "https://alicia.linklyai.page/q3-k2m4", "confirm_sensitive": true})
+            serde_json::json!({"action": "save", "url": "https://alicia.linklyai.page/q3-k2m4", "confirm_sensitive": "a1b2c3d4e5f6"})
         );
         let mut list = params("list");
         list.limit = Some(5);
-        assert_eq!(arguments(&list, None), serde_json::json!({"action": "list", "limit": 5}));
+        assert_eq!(
+            arguments(&list, None),
+            serde_json::json!({"action": "list", "limit": 5})
+        );
     }
 }

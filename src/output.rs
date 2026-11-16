@@ -159,7 +159,8 @@ mod tests {
 
     #[test]
     fn an_answer_keeps_its_own_status() {
-        let env = answer_envelope(r#"{"status":"needs_confirmation","message":"Not published: held."}"#);
+        let env =
+            answer_envelope(r#"{"status":"needs_confirmation","message":"Not published: held."}"#);
         assert_eq!(env["status"], "needs_confirmation");
         assert_eq!(env["message"], "Not published: held.");
     }

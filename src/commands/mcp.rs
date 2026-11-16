@@ -38,7 +38,10 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
 
     // Advertise `pages` only when the upstream does — it follows the
     // account's Linkly AI Pages switch there, and an older Desktop has none.
-    let (client, pages) = probe_pages(client, PAGES_PROBE_TIMEOUT, || McpClient::connect_passthrough(&conn)).await?;
+    let (client, pages) = probe_pages(client, PAGES_PROBE_TIMEOUT, || {
+        McpClient::connect_passthrough(&conn)
+    })
+    .await?;
 
     // Create the bridge handler and serve over stdio
     let handler = StdioBridgeHandler::with_pages(client, conn, pages);
@@ -71,7 +74,11 @@ const PAGES_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// and leaves its session possibly stuck: the transport sends one request at
 /// a time and waits for each answer, so every later call would queue behind
 /// it. The bridge then serves through a new session from `reconnect`.
-pub(crate) async fn probe_pages<F, Fut>(client: McpClient, deadline: Duration, reconnect: F) -> Result<(McpClient, bool)>
+pub(crate) async fn probe_pages<F, Fut>(
+    client: McpClient,
+    deadline: Duration,
+    reconnect: F,
+) -> Result<(McpClient, bool)>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<McpClient>>,

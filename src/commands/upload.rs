@@ -57,7 +57,10 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
             .and_then(|m| m.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| format!("HTTP {status}"));
-        let code = answer.get("error").and_then(|c| c.as_str()).unwrap_or("upload_failed");
+        let code = answer
+            .get("error")
+            .and_then(|c| c.as_str())
+            .unwrap_or("upload_failed");
         return output::print_error(&format!("{code}: {message}"), json_mode);
     }
     if !is_upload_answer(&answer) {
@@ -72,7 +75,10 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
         output::print_answer(&text);
     } else {
         // The answer's `message` says what happened and what to tell the user.
-        let message = answer.get("message").and_then(|m| m.as_str()).unwrap_or(&text);
+        let message = answer
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or(&text);
         println!("{message}");
     }
     Ok(())
@@ -81,7 +87,10 @@ pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
 /// Whether a successful PUT's body is the endpoint's answer: an object with
 /// its `status`. Anything else was garbled on the way.
 fn is_upload_answer(answer: &serde_json::Value) -> bool {
-    answer.get("status").and_then(|status| status.as_str()).is_some()
+    answer
+        .get("status")
+        .and_then(|status| status.as_str())
+        .is_some()
 }
 
 /// PUT `file` to `address`: the endpoint's status and its whole answer, or
@@ -150,10 +159,14 @@ mod tests {
 
     #[test]
     fn only_an_object_with_a_status_is_an_upload_answer() {
-        assert!(is_upload_answer(&serde_json::json!({ "status": "published", "url": "https://a.linklyai.page/x" })));
+        assert!(is_upload_answer(
+            &serde_json::json!({ "status": "published", "url": "https://a.linklyai.page/x" })
+        ));
         assert!(!is_upload_answer(&serde_json::Value::Null));
         assert!(!is_upload_answer(&serde_json::json!(["published"])));
-        assert!(!is_upload_answer(&serde_json::json!({ "message": "Uploaded." })));
+        assert!(!is_upload_answer(
+            &serde_json::json!({ "message": "Uploaded." })
+        ));
     }
 
     /// Reads one request off `socket`: head, then the body up to Content-Length.
@@ -168,7 +181,10 @@ mod tests {
             if let Some(end) = text.find("\r\n\r\n") {
                 let length = text[..end]
                     .lines()
-                    .find_map(|l| l.strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap()))
+                    .find_map(|l| {
+                        l.strip_prefix("content-length: ")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
                     .unwrap_or(0);
                 break (end + 4, length);
             }
@@ -208,7 +224,10 @@ mod tests {
 
         let error = send(&url, file.path()).await.unwrap_err();
 
-        assert!(error.starts_with("The upload's answer was cut off"), "{error}");
+        assert!(
+            error.starts_with("The upload's answer was cut off"),
+            "{error}"
+        );
         assert!(error.contains("Retry the same command"), "{error}");
     }
 
