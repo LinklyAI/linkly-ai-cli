@@ -686,8 +686,8 @@ pub struct PagesInput {
     #[schemars(description = "\
         save with url: only after the user explicitly agreed to publish a \
         held upload (one that seems to contain credentials or personal data): \
-        the version given in the answer that asked, like \"a1b2c3d4e5f6\". \
-        Publishes exactly that upload. null = omitted.\
+        the upload_id given in the answer that asked. Publishes exactly that \
+        upload. null = omitted.\
     ")]
     pub confirm_sensitive: Option<String>,
 
@@ -1727,17 +1727,26 @@ mod tests {
         );
     }
 
-    /// A confirmation names the held upload's version and goes on as it came;
-    /// a bare true is refused here, as the gateway refuses it.
+    /// A confirmation names the held upload's upload_id and goes on as it
+    /// came; null is left out like every optional field; a bare true is
+    /// refused here, as the gateway refuses it.
     #[test]
-    fn pages_input_confirms_by_version_not_true() {
-        let version: PagesInput = serde_json::from_str(
-            r#"{"action":"save","url":"https://alicia.linklyai.page/q3","confirm_sensitive":"a1b2c3d4e5f6"}"#,
+    fn pages_input_confirms_by_upload_id_not_true() {
+        let upload: PagesInput = serde_json::from_str(
+            r#"{"action":"save","url":"https://alicia.linklyai.page/q3","confirm_sensitive":"0d4e3a9c-1111-4000-8000-000000000003"}"#,
         )
-        .expect("a version parses");
+        .expect("an upload_id parses");
         assert_eq!(
-            serde_json::to_value(version).unwrap()["confirm_sensitive"],
-            serde_json::json!("a1b2c3d4e5f6")
+            serde_json::to_value(upload).unwrap()["confirm_sensitive"],
+            serde_json::json!("0d4e3a9c-1111-4000-8000-000000000003")
+        );
+        let null: PagesInput = serde_json::from_str(
+            r#"{"action":"save","url":"https://alicia.linklyai.page/q3","confirm_sensitive":null}"#,
+        )
+        .expect("null parses");
+        assert_eq!(
+            serde_json::to_value(null).unwrap(),
+            serde_json::json!({"action": "save", "url": "https://alicia.linklyai.page/q3"})
         );
         assert!(serde_json::from_str::<PagesInput>(
             r#"{"action":"save","url":"https://alicia.linklyai.page/q3","confirm_sensitive":true}"#

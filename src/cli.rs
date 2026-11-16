@@ -412,8 +412,8 @@ block reports total, has_more and next_annotations_offset.")]
         url: Option<String>,
 
         /// save with --url: publish an upload held for possible credentials, only after the user agreed:
-        /// the version given in the answer that asked
-        #[arg(long, value_name = "VERSION")]
+        /// the upload_id given in the answer that asked
+        #[arg(long, value_name = "UPLOAD_ID")]
         confirm_sensitive: Option<String>,
 
         /// list: how many Pages to return (default 20, max 100)

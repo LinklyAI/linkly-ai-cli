@@ -136,10 +136,10 @@ mod tests {
         );
         let mut confirm = params("save");
         confirm.url = Some("https://alicia.linklyai.page/q3-k2m4".into());
-        confirm.confirm_sensitive = Some("a1b2c3d4e5f6".into());
+        confirm.confirm_sensitive = Some("0d4e3a9c-1111-4000-8000-000000000003".into());
         assert_eq!(
             arguments(&confirm, None),
-            serde_json::json!({"action": "save", "url": "https://alicia.linklyai.page/q3-k2m4", "confirm_sensitive": "a1b2c3d4e5f6"})
+            serde_json::json!({"action": "save", "url": "https://alicia.linklyai.page/q3-k2m4", "confirm_sensitive": "0d4e3a9c-1111-4000-8000-000000000003"})
         );
         let mut list = params("list");
         list.limit = Some(5);
