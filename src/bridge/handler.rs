@@ -666,10 +666,10 @@ pub struct PagesInput {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "\
-        Who can open the Page: public (default for a new Page) or private \
-        (Pro, only the author). save accepts it only when it creates a Page \
-        and never changes it on an existing one; update also accepts \
-        password (Pro). null = omitted.\
+        Who can open the Page: private (default for a new Page, only the \
+        author) or public (anyone with the link). save accepts it only when \
+        it creates a Page and never changes it on an existing one; update \
+        also accepts password (Pro). null = omitted.\
     ")]
     pub access: Option<String>,
 
@@ -1046,9 +1046,9 @@ impl StdioBridgeHandler {
             \nWhen not to use: creating or showing content. If the user named another tool (an \
             Artifact, Canvas or anything else), use that tool. Producing HTML or Markdown is not a \
             reason to use this tool, and creating a file is not consent to publish it. Not for \
-            saving notes to the user's library (use note_save). On the Free plan every Page is \
-            public and can show up in search engines, so confirm with the user before sharing \
-            anything personal or confidential.\
+            saving notes to the user's library (use note_save). New Pages are private unless access \
+            is public. Public Pages can be opened by anyone and can show up in search engines, so \
+            confirm with the user before making anything personal or confidential public.\
             \n\
             \naction (required, no default):\
             \n- save: create a Page, or replace the content of the Page given in url.\
@@ -1069,17 +1069,17 @@ impl StdioBridgeHandler {
             recently published; paginate with limit and offset.\
             \n- delete: delete the Page at url. The link stops working within about a minute.\
             \n\
-            \nLinks in results: url is the link to share with others. open_url is for the user to \
-            open the Page themselves; if they are signed in to linkly.ai, it opens with them \
-            recognized as the author (they see Manage and can open private Pages). Tell the user \
-            both links.\
+            \nLinks in results: url is the link to share with others; it opens for them only when \
+            the Page is public or password-protected. open_url is for the user to open the Page \
+            themselves; if they are signed in to linkly.ai, it opens with them recognized as the \
+            author (they see Manage and can open private Pages). Tell the user both links.\
             \n\
-            \naccess: public (default for new Pages) or private (Pro): only the author can open a \
-            private Page. update also accepts password (Pro): visitors must enter a password to \
-            open the Page. Passwords are created and shown only at linkly.ai, never through this \
-            tool. If the Page has no password yet, update makes it private and returns manage_url; \
-            tell the user to finish there, and do not say the Page is password-protected until they \
-            have.\
+            \naccess: private (default for new Pages): only the author can open the Page. public: \
+            anyone with the link can open it. update also accepts password (Pro): visitors must \
+            enter a password to open the Page. Passwords are created and shown only at linkly.ai, \
+            never through this tool. If the Page has no password yet, update makes it private and \
+            returns manage_url; tell the user to finish there, and do not say the Page is \
+            password-protected until they have.\
             \nPublic Pages can be opened by anyone and may appear in search engines; once your \
             Linkly AI Pages homepage launches, they are listed there and in RSS. Email allow-lists \
             are not available yet.\
@@ -1090,7 +1090,7 @@ impl StdioBridgeHandler {
             growth review\"}\
             \n{\"action\":\"save\",\"content\":\"# Weekly \
             notes\\n...\",\"content_type\":\"markdown\"}\
-            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"private\"}\
+            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"public\"}\
             \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"password\"}\
             \n{\"action\":\"get\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\"}\
             \n{\"action\":\"delete\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\"}\

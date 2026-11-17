@@ -403,7 +403,7 @@ block reports total, has_more and next_annotations_offset.")]
         #[arg(long, value_hint = clap::ValueHint::Other)]
         description: Option<String>,
 
-        /// Who can open it: public or private (Pro); update also takes password (Pro). save sets it only on a new Page
+        /// Who can open it: private (the default for a new Page) or public; update also takes password (Pro). save sets it only on a new Page
         #[arg(long, value_parser = ["public", "private", "password"])]
         access: Option<String>,
 
