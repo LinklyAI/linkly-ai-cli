@@ -375,9 +375,9 @@ block reports total, has_more and next_annotations_offset.")]
     ///
     /// Pages live at https://<username>.linklyai.page/<slug>. A save with
     /// --file-path answers with an upload address: send the file with
-    /// `linkly upload <address> <file>`. Public Pages can be opened by anyone and
-    /// may appear in search engines; private and password Pages need Pro, and
-    /// passwords are made only at linkly.ai
+    /// `linkly upload <address> <file>`. New Pages are private: only you can open
+    /// them. Public Pages can be opened by anyone and may appear in search
+    /// engines; password Pages need Pro, and passwords are made only at linkly.ai
     Pages {
         /// What to do: save, list, get, update or delete
         #[arg(long, value_parser = ["save", "list", "get", "update", "delete"])]
