@@ -17,7 +17,7 @@ mod version_check;
 use std::io::{IsTerminal, Write};
 
 use clap::Parser;
-use cli::{AuthAction, Cli, Command, ConnectionArgs};
+use cli::{AuthAction, Cli, Command, ConnectionArgs, PagesAction};
 use outcome::Outcome;
 
 #[tokio::main]
@@ -423,45 +423,20 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .map(found)
         }
         Command::Pages {
-            action,
-            file_path,
-            content,
-            content_type,
-            title,
-            description,
-            access,
-            url,
-            confirm_sensitive,
-            limit,
-            offset,
-            conn,
-        } => {
-            let conn = resolve_conn(&conn, client)?;
-            let client = client::McpClient::connect(&conn).await?;
-            commands::pages::run(
-                &client,
-                &conn,
-                commands::pages::PagesParams {
-                    action,
-                    file_path,
-                    content,
-                    content_type,
-                    title,
-                    description,
-                    access,
-                    url,
-                    confirm_sensitive,
-                    limit,
-                    offset,
-                },
-                json_mode,
-            )
-            .await
-            .map(found)
-        }
-        Command::Upload { address, file } => commands::upload::run(&address, &file, json_mode)
+            action: PagesAction::Upload { address, file },
+        } => commands::upload::run(&address, &file, json_mode)
             .await
             .map(found),
+        Command::Pages { action } => {
+            let Some((params, conn)) = commands::pages::PagesParams::from_action(action) else {
+                unreachable!("pages upload is handled above");
+            };
+            let conn = resolve_conn(&conn, client)?;
+            let client = client::McpClient::connect(&conn).await?;
+            commands::pages::run(&client, &conn, params, json_mode)
+                .await
+                .map(found)
+        }
     }
 }
 

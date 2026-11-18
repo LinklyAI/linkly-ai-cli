@@ -1,14 +1,16 @@
-//! `linkly pages` — the `pages` tool: publish a file or text
-//! as a Linkly AI Page, and get, update, list or delete your Pages.
+//! `linkly pages save|list|get|update|delete` — the `pages` tool: publish a
+//! file or text as a Linkly AI Page, and get, update, list or delete your Pages.
 //!
-//! The rules live in the gateway; this command passes the arguments on and
-//! prints the answer as it comes. A `save` with `--file-path` answers with an
-//! upload address: send the file there with `linkly upload <address> <file>`.
+//! The rules live in the gateway; these commands pass the arguments on and
+//! print the answer as it comes. A `save` with `--file-path` answers with an
+//! upload address: send the file there with `linkly pages upload <address> <file>`
+//! (upload.rs).
 
 use std::io::Read;
 
 use anyhow::Result;
 
+use crate::cli::{ConnectionArgs, PagesAction};
 use crate::client::McpClient;
 use crate::connection::ConnectionInfo;
 use crate::output;
@@ -20,6 +22,7 @@ const STDIN_SENTINEL: &str = "-";
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 
 /// The `pages` arguments, in the tool's own names.
+#[derive(Default)]
 pub struct PagesParams {
     pub action: String,
     pub file_path: Option<String>,
@@ -32,6 +35,86 @@ pub struct PagesParams {
     pub confirm_sensitive: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
+}
+
+impl PagesParams {
+    /// The tool call for a `linkly pages` subcommand, and the connection it
+    /// goes on. `None` for `upload`, which is not a tool call (upload.rs).
+    pub fn from_action(action: PagesAction) -> Option<(Self, ConnectionArgs)> {
+        let call = |action: &str| PagesParams {
+            action: action.to_string(),
+            ..Default::default()
+        };
+        Some(match action {
+            PagesAction::Save {
+                file_path,
+                content,
+                content_type,
+                title,
+                description,
+                access,
+                url,
+                confirm_sensitive,
+                conn,
+            } => (
+                PagesParams {
+                    file_path,
+                    content,
+                    content_type,
+                    title,
+                    description,
+                    access,
+                    url,
+                    confirm_sensitive,
+                    ..call("save")
+                },
+                conn,
+            ),
+            PagesAction::List {
+                limit,
+                offset,
+                conn,
+            } => (
+                PagesParams {
+                    limit,
+                    offset,
+                    ..call("list")
+                },
+                conn,
+            ),
+            PagesAction::Get { url, conn } => (
+                PagesParams {
+                    url: Some(url),
+                    ..call("get")
+                },
+                conn,
+            ),
+            PagesAction::Update {
+                url,
+                title,
+                description,
+                access,
+                conn,
+            } => (
+                PagesParams {
+                    url: Some(url),
+                    title,
+                    description,
+                    access,
+                    ..call("update")
+                },
+                conn,
+            ),
+            PagesAction::Delete { url, conn } => (
+                PagesParams {
+                    url: Some(url),
+                    ..call("delete")
+                },
+                conn,
+            ),
+            PagesAction::Upload { .. } => return None,
+        })
+    }
 }
 
 fn read_content(content: &str) -> Result<String> {
@@ -146,6 +229,65 @@ mod tests {
         assert_eq!(
             arguments(&list, None),
             serde_json::json!({"action": "list", "limit": 5})
+        );
+    }
+
+    /// The tool arguments `linkly <args>` sends; `None` when it is no tool call.
+    fn call(args: &[&str]) -> Option<serde_json::Value> {
+        use clap::Parser;
+        let cli =
+            crate::cli::Cli::try_parse_from(std::iter::once("linkly").chain(args.iter().copied()))
+                .expect("parse");
+        let crate::cli::Command::Pages { action } = cli.command else {
+            panic!("expected a pages command");
+        };
+        PagesParams::from_action(action).map(|(params, _)| {
+            let content = params.content.clone();
+            arguments(&params, content)
+        })
+    }
+
+    #[test]
+    fn subcommands_name_the_action() {
+        let page = "https://alicia.linklyai.page/q3-k2m4";
+        assert_eq!(
+            call(&[
+                "pages",
+                "save",
+                "--content",
+                "# Hi",
+                "--content-type",
+                "markdown"
+            ]),
+            Some(
+                serde_json::json!({"action": "save", "content": "# Hi", "content_type": "markdown"})
+            )
+        );
+        assert_eq!(
+            call(&["pages", "list", "--limit", "5"]),
+            Some(serde_json::json!({"action": "list", "limit": 5}))
+        );
+        assert_eq!(
+            call(&["pages", "get", "--url", page]),
+            Some(serde_json::json!({"action": "get", "url": page}))
+        );
+        assert_eq!(
+            call(&["pages", "update", "--url", page, "--access", "public"]),
+            Some(serde_json::json!({"action": "update", "url": page, "access": "public"}))
+        );
+        assert_eq!(
+            call(&["pages", "delete", "--url", page]),
+            Some(serde_json::json!({"action": "delete", "url": page}))
+        );
+        // upload talks to the upload address, not to the tool.
+        assert_eq!(
+            call(&[
+                "pages",
+                "upload",
+                "https://api.linkly.ai/v1/uploads/upl_x",
+                "q3.html"
+            ]),
+            None
         );
     }
 }

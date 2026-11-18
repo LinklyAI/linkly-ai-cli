@@ -1,4 +1,4 @@
-//! `linkly upload <address> <file>` — send a file's raw bytes to a Linkly AI
+//! `linkly pages upload <address> <file>` — send a file's raw bytes to a Linkly AI
 //! Pages upload address.
 //!
 //! The `pages` tool's `save` answers with an upload address; agents that can
