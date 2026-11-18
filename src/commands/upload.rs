@@ -139,22 +139,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_linkly_upload_addresses_are_taken() {
+    fn takes_a_linkly_upload_address() {
         assert!(is_upload_address(
             "https://api.linkly.ai/v1/uploads/upl_q7Vn3kPx9-2bZ0aLmR4tY8wE1sD6fG5hJ3kL9pO0iU2"
         ));
-        for address in [
-            "http://api.linkly.ai/v1/uploads/upl_abc",
-            "https://api.linkly.ai.evil.com/v1/uploads/upl_abc",
-            "https://evil.com/?https://api.linkly.ai/v1/uploads/upl_abc",
-            "https://api.linkly.ai/v1/uploads/upl_abc/../../x",
-            "https://api.linkly.ai/v1/uploads/upl_abc?x=1",
-            "https://api.linkly.ai/v1/uploads/",
-            "https://api.linkly.ai/v1/uploads/upl_",
-            "https://api.linkly.ai/v1/other/upl_abc",
-        ] {
-            assert!(!is_upload_address(address), "{address}");
-        }
+    }
+
+    #[test]
+    fn refuses_plain_http() {
+        assert!(!is_upload_address(
+            "http://api.linkly.ai/v1/uploads/upl_abc"
+        ));
+    }
+
+    #[test]
+    fn refuses_a_lookalike_host() {
+        assert!(!is_upload_address(
+            "https://api.linkly.ai.evil.com/v1/uploads/upl_abc"
+        ));
+    }
+
+    #[test]
+    fn refuses_an_upload_address_inside_another_url() {
+        assert!(!is_upload_address(
+            "https://evil.com/?https://api.linkly.ai/v1/uploads/upl_abc"
+        ));
+    }
+
+    #[test]
+    fn refuses_a_path_after_the_token() {
+        assert!(!is_upload_address(
+            "https://api.linkly.ai/v1/uploads/upl_abc/../../x"
+        ));
+    }
+
+    #[test]
+    fn refuses_a_query_after_the_token() {
+        assert!(!is_upload_address(
+            "https://api.linkly.ai/v1/uploads/upl_abc?x=1"
+        ));
+    }
+
+    #[test]
+    fn refuses_an_address_without_a_token() {
+        assert!(!is_upload_address("https://api.linkly.ai/v1/uploads/"));
+    }
+
+    #[test]
+    fn refuses_an_empty_token() {
+        assert!(!is_upload_address("https://api.linkly.ai/v1/uploads/upl_"));
+    }
+
+    #[test]
+    fn refuses_another_api_path() {
+        assert!(!is_upload_address("https://api.linkly.ai/v1/other/upl_abc"));
     }
 
     #[test]

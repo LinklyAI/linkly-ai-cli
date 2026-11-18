@@ -1674,50 +1674,61 @@ mod tests {
         );
     }
 
-    // `pages` is advertised only when the upstream lists it, on both bridges,
-    // with the same names, annotations and arguments as the Desktop and the gateway.
+    // `pages` is advertised only when the upstream lists it, with the same
+    // names, annotations and arguments as the Desktop and the gateway.
+    fn assert_pages_follows_the_upstream(is_remote: bool) {
+        let without = StdioBridgeHandler::build_router(is_remote, false);
+        assert!(!without.has_route("pages"));
+        let with = StdioBridgeHandler::build_router(is_remote, true);
+        let tool = with
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "pages")
+            .expect("pages advertised");
+        assert_eq!(tool.title.as_deref(), Some("pages"));
+        let annotations = tool.annotations.expect("annotations");
+        assert_eq!(annotations.title.as_deref(), Some("pages"));
+        assert_eq!(annotations.destructive_hint, Some(true));
+        assert_eq!(annotations.open_world_hint, Some(true));
+        let props = tool.input_schema["properties"]
+            .as_object()
+            .expect("properties");
+        let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "access",
+                "action",
+                "confirm_sensitive",
+                "content",
+                "content_type",
+                "description",
+                "file_path",
+                "limit",
+                "offset",
+                "title",
+                "url"
+            ]
+        );
+        assert_eq!(
+            props["action"]["enum"],
+            serde_json::json!(["save", "list", "get", "update", "delete"])
+        );
+    }
+
     #[test]
-    fn pages_is_advertised_only_when_the_upstream_has_it() {
-        for is_remote in [false, true] {
-            let without = StdioBridgeHandler::build_router(is_remote, false);
-            assert!(!without.has_route("pages"));
-            let with = StdioBridgeHandler::build_router(is_remote, true);
-            let tool = with
-                .list_all()
-                .into_iter()
-                .find(|t| t.name == "pages")
-                .expect("pages advertised");
-            assert_eq!(tool.title.as_deref(), Some("pages"));
-            let annotations = tool.annotations.expect("annotations");
-            assert_eq!(annotations.title.as_deref(), Some("pages"));
-            assert_eq!(annotations.destructive_hint, Some(true));
-            assert_eq!(annotations.open_world_hint, Some(true));
-            let props = tool.input_schema["properties"]
-                .as_object()
-                .expect("properties");
-            let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
-            keys.sort();
-            assert_eq!(
-                keys,
-                vec![
-                    "access",
-                    "action",
-                    "confirm_sensitive",
-                    "content",
-                    "content_type",
-                    "description",
-                    "file_path",
-                    "limit",
-                    "offset",
-                    "title",
-                    "url"
-                ]
-            );
-            assert_eq!(
-                props["action"]["enum"],
-                serde_json::json!(["save", "list", "get", "update", "delete"])
-            );
-        }
+    fn pages_follows_the_upstream_on_the_local_bridge() {
+        assert_pages_follows_the_upstream(false);
+    }
+
+    #[test]
+    fn pages_follows_the_upstream_on_the_remote_bridge() {
+        assert_pages_follows_the_upstream(true);
+    }
+
+    #[test]
+    fn pages_optional_arguments_take_null() {
         let explicit_null: PagesInput =
             serde_json::from_str(r#"{"action":"list","limit":null,"url":null}"#)
                 .expect("null optionals parse");
