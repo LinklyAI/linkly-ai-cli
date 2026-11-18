@@ -495,7 +495,7 @@ pub enum PagesAction {
         description: Option<String>,
 
         /// Who can open a new Page: private (the default) or public. Saving into an existing Page never changes it; use `linkly pages update`
-        #[arg(long, value_parser = ["public", "private", "password"])]
+        #[arg(long, value_parser = ["public", "private"])]
         access: Option<String>,
 
         /// Link of one of your Pages: replace its content
@@ -985,6 +985,8 @@ mod tests {
         assert!(parse(&["pages", "list", "--limit", "5"]).is_ok());
         assert!(parse(&["pages", "get", "--url", page]).is_ok());
         assert!(parse(&["pages", "update", "--url", page, "--access", "public"]).is_ok());
+        // A password is set with update only (save takes public or private).
+        assert!(parse(&["pages", "save", "--content", "x", "--access", "password"]).is_err());
         assert!(parse(&["pages", "delete", "--url", page]).is_ok());
         assert!(parse(&["pages", "upload", address, "q3.html"]).is_ok());
         // get, update and delete name the Page; no --action, no top-level upload.
