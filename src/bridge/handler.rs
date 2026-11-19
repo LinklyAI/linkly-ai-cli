@@ -1414,7 +1414,7 @@ mod tests {
     // which hold for Desktop results only.
     #[test]
     fn search_advertises_match_source_and_number_queries_locally() {
-        let router = StdioBridgeHandler::build_router(false);
+        let router = StdioBridgeHandler::build_router(false, false);
         let search = router.get("search").expect("search advertised");
         let desc = search.description.as_deref().unwrap_or_default();
         assert!(desc.contains("each result carries `matched_by`"), "{desc}");
@@ -1446,7 +1446,7 @@ mod tests {
 
     #[test]
     fn search_advertises_match_source_and_number_queries_remotely() {
-        let router = StdioBridgeHandler::build_router(true);
+        let router = StdioBridgeHandler::build_router(true, false);
         let search = router.get("search").expect("search advertised");
         let desc = search.description.as_deref().unwrap_or_default();
         assert!(desc.contains("each result carries `matched_by`"), "{desc}");
