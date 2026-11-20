@@ -383,7 +383,7 @@ async fn preflight_check(conn: &ConnectionInfo, check_version: bool) -> Result<(
         format!("{}/health", conn.base_url)
     };
     let client = crate::http::client_builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(crate::connection::health_check_timeout(conn.is_remote))
         .build()?;
 
     let mut req = client.get(&health_url);

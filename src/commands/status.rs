@@ -310,7 +310,7 @@ async fn run_remote(conn: &ConnectionInfo, json_mode: bool) -> Result<()> {
     let skill_check = tokio::spawn(check_skill());
 
     let client = crate::http::client_builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(crate::connection::health_check_timeout(conn.is_remote))
         .build()?;
     let mut req = client.get(&url);
     if let Some(ref auth) = conn.auth_header {
