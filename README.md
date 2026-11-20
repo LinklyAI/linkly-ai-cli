@@ -74,7 +74,7 @@ linkly find-paths --patterns "Dropbox" --limit 5
 ### Search Documents
 
 ```bash
-linkly search "machine learning"
+linkly search "how does attention scale with sequence length?"
 linkly search "API design" --limit 5
 linkly search "notes" --type pdf,md,docx,pptx,epub
 linkly search "attention" --library my-research

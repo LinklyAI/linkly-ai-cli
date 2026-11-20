@@ -120,10 +120,10 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
-    /// Search indexed documents by keywords
+    /// Search indexed documents with a natural-language question
     #[command(after_help = "\
 Examples:
-  linkly search \"attention\" --library my-research
+  linkly search \"how does attention scale with sequence length?\" --library my-research
   linkly search \"todo\" --scope notes --tags project
   linkly search \"source unclear\" --scope annotations     # only your clip annotations
 
@@ -138,7 +138,7 @@ On the Desktop, a query that is only a number of six or more digits (an ID,
 a tax or phone number) runs keyword search only; a shorter number such as a
 year, or one with a word, runs both. cloud:// results carry no `matched_by`.")]
     Search {
-        /// Search query
+        /// What to find, as a full question (ranks better than a keyword list); an exact ID, code or error message as is
         query: String,
 
         /// Maximum number of results (default: 20, max: 50)
