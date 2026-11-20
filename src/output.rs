@@ -29,6 +29,30 @@ pub fn print_result(content: &str, json_mode: bool) {
     }
 }
 
+/// Print an answer whose own `status` is the result (the upload endpoint's
+/// `published`, `needs_confirmation`, …) in JSON mode: as it came, with the
+/// skills notice, where [`print_result`] would put `"status": "success"`.
+pub fn print_answer(content: &str) {
+    println!("{}", answer_envelope(content));
+}
+
+fn answer_envelope(content: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(serde_json::Value::Object(mut obj)) => {
+            add_skills_hint(&mut obj);
+            serde_json::Value::Object(obj)
+        }
+        // Not an object: wrapped as print_result does.
+        _ => {
+            let mut envelope = serde_json::json!({ "status": "success", "content": content });
+            if let Some(obj) = envelope.as_object_mut() {
+                add_skills_hint(obj);
+            }
+            envelope
+        }
+    }
+}
+
 /// Attach the skills notice when one is pending.
 ///
 /// The field is named without an underscore on purpose. `_`-prefixed keys
@@ -131,6 +155,21 @@ mod tests {
         assert_eq!(env["code"], -32000);
         assert_eq!(env["message"], "offline");
         assert!(env.get("data").is_none());
+    }
+
+    #[test]
+    fn an_answer_keeps_its_own_status() {
+        let env =
+            answer_envelope(r#"{"status":"needs_confirmation","message":"Not published: held."}"#);
+        assert_eq!(env["status"], "needs_confirmation");
+        assert_eq!(env["message"], "Not published: held.");
+    }
+
+    #[test]
+    fn an_answer_that_is_not_an_object_is_wrapped() {
+        let env = answer_envelope("Uploaded.");
+        assert_eq!(env["status"], "success");
+        assert_eq!(env["content"], "Uploaded.");
     }
 
     #[test]

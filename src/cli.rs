@@ -377,6 +377,18 @@ block reports total, has_more and next_annotations_offset.")]
         conn: ConnectionArgs,
     },
 
+    /// Linkly AI Pages: publish a file or text as a web page, and manage your Pages
+    ///
+    /// Pages live at https://<username>.linklyai.page/<slug>. `linkly pages save
+    /// --file-path …` answers with an upload address: send the file with
+    /// `linkly pages upload <address> <file>`. New Pages are private: only you can
+    /// open them. Public Pages can be opened by anyone and may appear in search
+    /// engines; password Pages need Pro, and passwords are made only at linkly.ai
+    Pages {
+        #[command(subcommand)]
+        action: PagesAction,
+    },
+
     /// Show Desktop status: version, indexed documents, index state (gateway and tunnel with --remote)
     Status {
         #[command(flatten)]
@@ -459,6 +471,121 @@ too.")]
     Skills {
         #[command(subcommand)]
         action: SkillsAction,
+    },
+}
+
+/// `linkly pages <action>`: the `pages` tool's actions, plus `upload` for the
+/// file a save asks for. The flags are the tool's parameters.
+#[derive(Subcommand)]
+pub enum PagesAction {
+    /// Publish a file or text as a Page, or replace the content of the Page given in --url
+    Save {
+        /// Absolute path of the file to publish (Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG)
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        file_path: Option<String>,
+
+        /// The Markdown or HTML text itself instead of a file; '-' reads it from stdin. Needs --content-type
+        #[arg(long)]
+        content: Option<String>,
+
+        /// With --content: markdown or html
+        #[arg(long, value_parser = ["markdown", "html"])]
+        content_type: Option<String>,
+
+        /// The Page title
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        title: Option<String>,
+
+        /// One sentence about the Page
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        description: Option<String>,
+
+        /// Who can open a new Page: private (the default) or public. Saving into an existing Page never changes it; use `linkly pages update`
+        #[arg(long, value_parser = ["public", "private"])]
+        access: Option<String>,
+
+        /// Link of one of your Pages: replace its content
+        #[arg(long, value_hint = clap::ValueHint::Url)]
+        url: Option<String>,
+
+        /// With --url: publish an upload held for possible credentials, only after the user agreed:
+        /// the upload_id given in the answer that asked
+        #[arg(long, value_name = "UPLOAD_ID")]
+        confirm_sensitive: Option<String>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// List your Pages: pending ones first, then the most recently published
+    List {
+        /// How many Pages to return (default 20, max 100)
+        #[arg(long)]
+        limit: Option<u32>,
+
+        /// How many Pages to skip
+        #[arg(long)]
+        offset: Option<u32>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Details, links and settings of one of your Pages (never the password)
+    Get {
+        /// Link of one of your Pages
+        #[arg(long, value_hint = clap::ValueHint::Url)]
+        url: String,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Change a Page's title, description or access, without uploading again
+    Update {
+        /// Link of one of your Pages
+        #[arg(long, value_hint = clap::ValueHint::Url)]
+        url: String,
+
+        /// The new title
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        title: Option<String>,
+
+        /// The new one-sentence description
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        description: Option<String>,
+
+        /// Who can open it: private, public, or password (Pro; the password itself is made at linkly.ai)
+        #[arg(long, value_parser = ["public", "private", "password"])]
+        access: Option<String>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Delete one of your Pages; the link stops working within about a minute
+    Delete {
+        /// Link of one of your Pages
+        #[arg(long, value_hint = clap::ValueHint::Url)]
+        url: String,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Send a file to the upload address a save answered with
+    ///
+    /// Sends the raw bytes with an HTTP PUT straight to that address, so it takes
+    /// no connection flags. Only addresses that start with
+    /// https://api.linkly.ai/v1/uploads/upl_ are accepted. Retrying the same
+    /// command is safe until the address expires (30 minutes)
+    Upload {
+        /// The upload address (https://api.linkly.ai/v1/uploads/upl_…)
+        address: String,
+
+        /// The file to send
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: std::path::PathBuf,
     },
 }
 
@@ -853,5 +980,26 @@ mod tests {
         // explanation, which beats clap's "unexpected argument".
         assert!(parse(&["mcp", "--endpoint", "http://x:1/mcp"]).is_ok());
         assert!(parse(&["mcp", "--lan"]).is_err());
+    }
+
+    #[test]
+    fn pages_actions_are_subcommands() {
+        // `linkly pages <action>`: the tool's actions, plus upload.
+        let page = "https://alicia.linklyai.page/q3-k2m4";
+        let address = "https://api.linkly.ai/v1/uploads/upl_x";
+        assert!(parse(&["pages", "save", "--file-path", "/Users/me/q3.html"]).is_ok());
+        assert!(parse(&["pages", "list", "--limit", "5"]).is_ok());
+        assert!(parse(&["pages", "get", "--url", page]).is_ok());
+        assert!(parse(&["pages", "update", "--url", page, "--access", "public"]).is_ok());
+        // A password is set with update only (save takes public or private).
+        assert!(parse(&["pages", "save", "--content", "x", "--access", "password"]).is_err());
+        assert!(parse(&["pages", "delete", "--url", page]).is_ok());
+        assert!(parse(&["pages", "upload", address, "q3.html"]).is_ok());
+        // get, update and delete name the Page; no --action, no top-level upload.
+        assert!(parse(&["pages", "get"]).is_err());
+        assert!(parse(&["pages", "update", "--access", "public"]).is_err());
+        assert!(parse(&["pages"]).is_err());
+        assert!(parse(&["pages", "--action", "list"]).is_err());
+        assert!(parse(&["upload", address, "q3.html"]).is_err());
     }
 }
