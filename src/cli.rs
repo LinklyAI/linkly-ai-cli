@@ -138,7 +138,7 @@ On the Desktop, a query that is only a number of six or more digits (an ID,
 a tax or phone number) runs keyword search only; a shorter number such as a
 year, or one with a word, runs both. cloud:// results carry no `matched_by`.")]
     Search {
-        /// What to find, as a full question (ranks better than a keyword list); an exact ID, code or error message as is
+        /// What to find. A full question usually ranks best; keywords or an exact ID, code or error message also work
         query: String,
 
         /// Maximum number of results (default: 20, max: 50)
