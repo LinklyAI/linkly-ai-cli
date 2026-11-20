@@ -1,9 +1,25 @@
+use std::time::Duration;
+
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 /// Remote tunnel endpoint
 const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
 pub(crate) const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
+
+/// How long a health check may take before the connection counts as unreachable.
+///
+/// Desktop on this machine or on the LAN answers within milliseconds. The remote
+/// gateway is reached over the internet, often through a proxy, where the TLS
+/// handshake alone can take over 5 seconds (measured on a Mac behind one), so a
+/// remote check gets 15 seconds.
+pub fn health_check_timeout(is_remote: bool) -> Duration {
+    if is_remote {
+        Duration::from_secs(15)
+    } else {
+        Duration::from_secs(5)
+    }
+}
 
 /// Credentials file path: <config dir>/credentials.json (see `config_dir`)
 /// New format: { "remotes": [{ "name": "default", "key": "lkai_xxx" }],

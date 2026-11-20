@@ -379,7 +379,7 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
     };
 
     let client = match crate::http::client_builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(connection::health_check_timeout(is_remote))
         .build()
     {
         Ok(c) => c,
@@ -621,11 +621,18 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
 
 async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
     let start = Instant::now();
-    // 10s outer timeout overrides the per-operation timeouts inside connect (30s) / call_tool (60s),
+    // The outer timeout overrides the per-operation timeouts inside connect (30s) / call_tool (60s),
     // since doctor should give a quick verdict rather than making the user wait.
+    // Remote gets 30s: connect runs its own health check first (up to 15s there), then opens
+    // the session over a second connection, so a slow TLS handshake is paid twice.
     // Uses tools/list (MCP built-in) instead of calling a specific tool, so it works
     // regardless of which tools the Desktop registers.
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
+    let limit = if conn.is_remote {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(10)
+    };
+    let result = tokio::time::timeout(limit, async {
         let client = McpClient::connect(conn).await?;
         client.list_tools().await
     })
@@ -663,7 +670,7 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
             checks.push(Check {
                 name: "MCP",
                 ok: false,
-                detail: "Round-trip timed out (10s)".to_string(),
+                detail: format!("Round-trip timed out ({}s)", limit.as_secs()),
                 latency_ms: Some(latency),
                 advice: Some(
                     "The tunnel is connected but the Desktop is not responding.\n    Try restarting Linkly AI Desktop."
