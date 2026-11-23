@@ -35,7 +35,7 @@ macro_rules! key_rejected_hint {
         concat!(
             "Your API key was rejected. Run `linkly auth logout`, then `linkly auth login` ",
             $crate::agent_login_hint!(),
-            ", or save a new key with `linkly auth set-key <api-key>`."
+            ", or save a new key with `linkly auth set-key <api-key>`. If LINKLY_API_KEY is set, it is the key in use."
         )
     };
 }

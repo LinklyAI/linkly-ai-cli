@@ -142,7 +142,7 @@ impl ConnectionInfo {
 /// Four modes:
 /// 1. `--endpoint` + `--token` → explicit endpoint (LAN mode, both required by clap)
 /// 2. `--lan` → LAN endpoint and token saved by `auth set-key --lan`
-/// 3. `--remote` → read ~/.linkly/credentials.json, connect to mcp.linkly.ai
+/// 3. `--remote` → LINKLY_API_KEY or ~/.linkly/credentials.json, connect to mcp.linkly.ai
 ///    (`token` is always ignored in this mode; authentication uses credentials file)
 /// 4. Default → read ~/.linkly/port (local mode, no auth)
 ///
@@ -184,11 +184,11 @@ pub fn resolve(
 
     // Mode 3: remote tunnel via mcp.linkly.ai
     if remote {
-        let api_key = read_credentials_api_key()?.context(concat!(
+        let api_key = remote_api_key()?.context(concat!(
             "No API key configured for remote mode.\n\n",
             "To set up, run: linkly auth login\n  ",
             crate::agent_login_hint!(),
-            "\n  (or paste a key from https://linkly.ai Dashboard > API Keys: linkly auth set-key <your-api-key>)\n\n",
+            "\n  (or paste a key from https://linkly.ai Dashboard > API Keys: linkly auth set-key <your-api-key>,\n   or set LINKLY_API_KEY)\n\n",
             "Run `linkly doctor --remote` to diagnose remote connection issues."
         ))?;
 
@@ -284,6 +284,30 @@ pub struct LanCredentials {
     pub endpoint: String,
     /// Desktop's LAN access token
     pub token: String,
+}
+
+/// Remote API key for this process, ahead of the one in the credentials file.
+/// For containers and MCP client configs, where nobody can run `auth login`.
+pub(crate) const API_KEY_ENV: &str = "LINKLY_API_KEY";
+
+/// Whether `key` looks like a Linkly AI API key: `lkai_` and 32 characters.
+pub(crate) fn is_api_key_format(key: &str) -> bool {
+    key.starts_with("lkai_") && key.len() == 37 && key.chars().all(|c| c.is_ascii_graphic())
+}
+
+/// The key `--remote` uses: `LINKLY_API_KEY`, else the stored one. An empty
+/// variable counts as unset.
+pub(crate) fn remote_api_key() -> Result<Option<String>> {
+    if let Ok(value) = std::env::var(API_KEY_ENV) {
+        let key = value.trim();
+        if !key.is_empty() {
+            if !is_api_key_format(key) {
+                bail!("Invalid API key in {API_KEY_ENV}. Expected: lkai_<32 hex chars>");
+            }
+            return Ok(Some(key.to_string()));
+        }
+    }
+    read_credentials_api_key()
 }
 
 /// Read API key from ~/.linkly/credentials.json
@@ -867,6 +891,28 @@ mod tests {
             let dir = config_dir().unwrap();
             std::env::remove_var(CONFIG_DIR_ENV);
             assert_eq!(dir, home.join(".linkly"));
+        });
+    }
+
+    #[test]
+    fn api_key_env_wins_over_the_stored_key() {
+        const STORED: &str = "lkai_11111111111111111111111111111111";
+        const FROM_ENV: &str = "lkai_22222222222222222222222222222222";
+        with_temp_home("api_key_env", |_home| {
+            save_credentials_api_key(STORED).unwrap();
+
+            std::env::set_var(API_KEY_ENV, format!("{FROM_ENV}\n"));
+            assert_eq!(remote_api_key().unwrap().as_deref(), Some(FROM_ENV));
+            let conn = resolve(None, None, false, true, None).unwrap();
+            assert_eq!(conn.auth_header, Some(format!("Bearer {FROM_ENV}")));
+
+            std::env::set_var(API_KEY_ENV, " ");
+            assert_eq!(remote_api_key().unwrap().as_deref(), Some(STORED));
+
+            std::env::set_var(API_KEY_ENV, "not-a-key");
+            let err = remote_api_key().unwrap_err().to_string();
+            assert!(err.contains(API_KEY_ENV), "{err}");
+            assert!(!err.contains("not-a-key"), "the value is not echoed: {err}");
         });
     }
 

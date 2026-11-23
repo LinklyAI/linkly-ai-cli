@@ -244,6 +244,10 @@ connects (Claude Desktop, for example, says `claude-ai`), so Desktop's access lo
 which application read the documents; with `--remote` the name is sent to the gateway as
 well. `--client <name>` overrides it.
 
+The bridge starts even when it cannot connect yet — Desktop is not running, or there is no
+key for `--remote`. The tools are listed, and each call tries to connect again and reports
+what is missing.
+
 The bridge serves the desktop on this machine or the cloud gateway — it does not bridge to a
 desktop on the LAN. A client on another machine should connect to the desktop's LAN HTTP
 endpoint directly (copy the config from the desktop app's Agent usage → View MCP connection settings), or bridge with
@@ -402,6 +406,9 @@ linkly auth logout --lan    # remove the LAN connection
 
 `logout` also revokes a key that `auth login` issued. A key saved with `set-key` is only
 removed locally, since it may be in use elsewhere — revoke it in the dashboard if needed.
+
+Set `LINKLY_API_KEY` to use a key without saving it, for example in a container or in an MCP
+client's `env` block. It takes precedence over the saved key for every `--remote` command.
 
 Set `LINKLY_CONFIG_DIR` to keep credentials (and a login waiting for approval) somewhere other than `~/.linkly` — for
 example one directory per user when an agent serves several people from the same

@@ -36,7 +36,7 @@ pub enum CredentialTarget {
 /// Handle `linkly auth set-key <key>` (remote, the default)
 pub fn set_key(key: &str) -> Result<()> {
     // Validate format: lkai_ prefix + 32 hex chars
-    if !key.starts_with("lkai_") || key.len() != 37 {
+    if !crate::connection::is_api_key_format(key) {
         bail!(
             "Invalid API key format. Expected: lkai_<32 hex chars>\n\
              Get your API key from https://linkly.ai/dashboard"

@@ -18,13 +18,13 @@ use serde::{Deserialize, Serialize};
 use rmcp::service::ServiceError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 
-use crate::client::{McpClient, ToolError, ToolFailure};
-use crate::connection::{sanitize_client_name, ConnectionInfo};
+use crate::bridge::upstream::Upstream;
+use crate::client::{ToolError, ToolFailure};
+use crate::connection::sanitize_client_name;
 
 #[derive(Clone)]
 pub struct StdioBridgeHandler {
-    client: std::sync::Arc<McpClient>,
-    conn: std::sync::Arc<ConnectionInfo>,
+    upstream: std::sync::Arc<Upstream>,
     /// Set once the skills notice has been appended, so it rides along with a
     /// single tool result. Repeating it on every call would spend the model's
     /// attention on the same sentence until it stops reading it — and this is
@@ -37,12 +37,11 @@ pub struct StdioBridgeHandler {
 }
 
 impl StdioBridgeHandler {
-    /// The bridge to `conn`; `pages` when the upstream lists that tool.
-    pub fn with_pages(client: McpClient, conn: ConnectionInfo, pages: bool) -> Self {
-        let tool_router = Self::build_router(conn.is_remote, pages);
+    /// The bridge to `upstream`; `pages` when it lists that tool.
+    pub fn with_pages(upstream: Upstream, pages: bool) -> Self {
+        let tool_router = Self::build_router(upstream.is_remote, pages);
         Self {
-            client: std::sync::Arc::new(client),
-            conn: std::sync::Arc::new(conn),
+            upstream: std::sync::Arc::new(upstream),
             notice_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pages,
             tool_router,
@@ -810,10 +809,7 @@ impl StdioBridgeHandler {
     ) -> Result<CallToolResult, McpError> {
         let args = serde_json::json!({});
 
-        let outcome = self
-            .client
-            .call_tool("list_libraries", args, &self.conn)
-            .await;
+        let outcome = self.upstream.call_tool("list_libraries", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -829,7 +825,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("explore", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("explore", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -845,7 +841,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("find_paths", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("find_paths", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -861,7 +857,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("search", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("search", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -877,7 +873,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("outline", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("outline", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -893,10 +889,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self
-            .client
-            .call_tool_content("read", args, &self.conn)
-            .await;
+        let outcome = self.upstream.call_tool_content("read", args).await;
         self.forward_content(outcome, flat_bridge_error)
     }
 
@@ -912,7 +905,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("list", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("list", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -928,7 +921,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("note_save", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("note_save", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -944,7 +937,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self.client.call_tool("grep", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("grep", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 }
@@ -969,10 +962,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self
-            .client
-            .call_tool("library_search", args, &self.conn)
-            .await;
+        let outcome = self.upstream.call_tool("library_search", args).await;
         self.forward(outcome, bridge_error)
     }
 
@@ -998,10 +988,7 @@ impl StdioBridgeHandler {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
 
-        let outcome = self
-            .client
-            .call_tool("library_link", args, &self.conn)
-            .await;
+        let outcome = self.upstream.call_tool("library_link", args).await;
         self.forward(outcome, bridge_error)
     }
 
@@ -1015,8 +1002,8 @@ impl StdioBridgeHandler {
         Parameters(_input): Parameters<ListLibrariesInput>,
     ) -> Result<CallToolResult, McpError> {
         let outcome = self
-            .client
-            .call_tool("list_libraries", serde_json::json!({}), &self.conn)
+            .upstream
+            .call_tool("list_libraries", serde_json::json!({}))
             .await;
         self.forward(outcome, flat_bridge_error)
     }
@@ -1104,7 +1091,7 @@ impl StdioBridgeHandler {
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
         // The gateway's business errors arrive as tool results with isError and
         // pass through `forward` intact (`tool_failure_result`).
-        let outcome = self.client.call_tool("pages", args, &self.conn).await;
+        let outcome = self.upstream.call_tool("pages", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 }
@@ -1192,7 +1179,7 @@ impl ServerHandler for StdioBridgeHandler {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 ..Default::default()
             },
-            instructions: Some(instructions(self.conn.is_remote, self.pages)),
+            instructions: Some(instructions(self.upstream.is_remote, self.pages)),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
@@ -1209,10 +1196,8 @@ impl ServerHandler for StdioBridgeHandler {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
-        if self.conn.client_name.is_none() {
-            if let Some(name) = sanitize_client_name(&request.client_info.name) {
-                self.client.name_caller(&name);
-            }
+        if let Some(name) = sanitize_client_name(&request.client_info.name) {
+            self.upstream.name_caller(&name).await;
         }
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
@@ -1224,6 +1209,9 @@ impl ServerHandler for StdioBridgeHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bridge::upstream::Session;
+    use crate::client::McpClient;
+    use crate::connection::ConnectionInfo;
 
     // The gateway reports paywall / Desktop offline / timeout as `isError`
     // results. The bridge must hand them on as results, not -32603, so the
@@ -2243,6 +2231,15 @@ mod tests {
     // `tools/call` request the production bridge sends.
     type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>;
 
+    /// An upstream that is already connected and never has to reconnect.
+    fn connected(client: McpClient, conn: ConnectionInfo) -> Upstream {
+        Upstream::new(
+            conn.is_remote,
+            Some(Session { client, conn }),
+            Box::new(|| panic!("the session is already open")),
+        )
+    }
+
     async fn bridge_over_fake_gateway() -> (StdioBridgeHandler, Seen) {
         use rmcp::ServiceExt;
 
@@ -2264,7 +2261,7 @@ mod tests {
         .expect("initialize finishes well within the budget")
         .expect("the bridge client initializes against the fake gateway");
         (
-            StdioBridgeHandler::with_pages(client, remote_connection(), false),
+            StdioBridgeHandler::with_pages(connected(client, remote_connection()), false),
             seen,
         )
     }
@@ -2696,7 +2693,8 @@ mod tests {
 
         let (mcp_url, log) = fake_http_upstream().await;
         let conn = local_connection(&mcp_url, client_flag);
-        let bridge = StdioBridgeHandler::with_pages(connect_to_fake(&conn).await, conn, false);
+        let bridge =
+            StdioBridgeHandler::with_pages(connected(connect_to_fake(&conn).await, conn), false);
 
         let (agent_io, bridge_io) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
@@ -2846,5 +2844,81 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(method, _)| method == "tools/call"));
+    }
+
+    /// An upstream that cannot be reached must not keep the bridge from
+    /// starting: the tools are listed, a call says why it failed, and once the
+    /// upstream is there the same bridge reaches it, still naming its agent.
+    #[tokio::test]
+    async fn the_bridge_starts_without_its_upstream_and_connects_later() {
+        use rmcp::ServiceExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (mcp_url, log) = fake_http_upstream().await;
+        let up = std::sync::Arc::new(AtomicBool::new(false));
+        let seen_up = up.clone();
+        let upstream = Upstream::new(
+            false,
+            None,
+            Box::new(move || {
+                let up = seen_up.clone();
+                let conn = local_connection(&mcp_url, None);
+                Box::pin(async move {
+                    if !up.load(Ordering::Relaxed) {
+                        anyhow::bail!("Desktop is not running");
+                    }
+                    let client = connect_to_fake(&conn).await;
+                    Ok(Session { client, conn })
+                })
+            }),
+        );
+        let bridge = StdioBridgeHandler::with_pages(upstream, false);
+
+        let (agent_io, bridge_io) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            if let Ok(server) = bridge.serve(bridge_io).await {
+                let _ = server.waiting().await;
+            }
+        });
+        let agent = rmcp::model::ClientInfo {
+            client_info: Implementation {
+                name: "some-agent".to_string(),
+                version: "1.0.0".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .serve(agent_io)
+        .await
+        .expect("the agent initializes while the upstream is down");
+
+        let tools = agent.list_tools(None).await.expect("the tools are listed");
+        assert!(tools.tools.iter().any(|tool| tool.name == "search"));
+
+        let failed = agent
+            .call_tool(search_request())
+            .await
+            .expect("a failed connection is a tool result");
+        assert_eq!(failed.is_error, Some(true));
+        let text = serde_json::to_string(&failed.content).unwrap();
+        assert!(text.contains("Desktop is not running"), "{text}");
+
+        up.store(true, Ordering::Relaxed);
+        for _ in 0..2 {
+            let result = agent
+                .call_tool(search_request())
+                .await
+                .expect("the search goes through");
+            assert_ne!(result.is_error, Some(true));
+        }
+        let _ = agent.cancel().await;
+
+        let seen = log.lock().unwrap().clone();
+        let sessions = seen.iter().filter(|(m, _)| m == "initialize").count();
+        assert_eq!(sessions, 1, "one session serves every later call");
+        assert_eq!(
+            client_header_on(&seen, "tools/call").as_deref(),
+            Some("some-agent")
+        );
     }
 }

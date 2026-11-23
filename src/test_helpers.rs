@@ -23,7 +23,12 @@ pub(crate) fn lock_env() -> MutexGuard<'static, ()> {
 /// Variables that redirect where the CLI reads and writes its state. A
 /// developer's shell may export them; tests must never follow them into a
 /// real config directory or website.
-const ISOLATED_VARS: [&str; 3] = ["HOME", "LINKLY_CONFIG_DIR", "LINKLY_WEB_URL"];
+const ISOLATED_VARS: [&str; 4] = [
+    "HOME",
+    "LINKLY_API_KEY",
+    "LINKLY_CONFIG_DIR",
+    "LINKLY_WEB_URL",
+];
 
 /// Restores ISOLATED_VARS on drop, so a panicking test cannot leak them.
 struct EnvRestore(Vec<(&'static str, Option<OsString>)>);
@@ -55,6 +60,7 @@ where
             .collect(),
     );
     std::env::set_var("HOME", &home);
+    std::env::remove_var("LINKLY_API_KEY");
     std::env::remove_var("LINKLY_CONFIG_DIR");
     std::env::remove_var("LINKLY_WEB_URL");
 

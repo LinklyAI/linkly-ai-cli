@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use rmcp::ServiceExt;
 
 use crate::bridge::handler::StdioBridgeHandler;
+use crate::bridge::upstream::{Session, Upstream};
 use crate::client::McpClient;
 use crate::connection;
 
@@ -28,23 +29,22 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
     if let Some(endpoint) = endpoint {
         bail!("{}", lan_bridge_unsupported(endpoint));
     }
-    let conn = connection::resolve(None, None, false, remote, client)?;
+    let client = client.map(str::to_string);
+    let connect = move || open_session(remote, client.clone());
 
-    // Connect to the desktop app's MCP server. The bridge is a transparent
-    // passthrough — skip the version gate so an old Desktop's "tool not
-    // found" surfaces verbatim to whatever upstream client (e.g. Claude
-    // Desktop) is using us, instead of being intercepted on the way in.
-    let client = McpClient::connect_passthrough(&conn).await?;
-
-    // Advertise `pages` only when the upstream does — it follows the
-    // account's Linkly AI Pages switch there, and an older Desktop has none.
-    let (client, pages) = probe_pages(client, PAGES_PROBE_TIMEOUT, || {
-        McpClient::connect_passthrough(&conn)
-    })
-    .await?;
+    // Serve even when the upstream cannot be reached: the client still gets
+    // the tool list, and each tool call tries again and says what is wrong.
+    let (session, pages) = match connect_and_probe(&connect).await {
+        Ok((session, pages)) => (Some(session), pages),
+        Err(err) => {
+            eprintln!("linkly mcp: not connected yet, will retry on the next tool call.\n{err:#}");
+            (None, false)
+        }
+    };
+    let upstream = Upstream::new(remote, session, Box::new(move || Box::pin(connect())));
 
     // Create the bridge handler and serve over stdio
-    let handler = StdioBridgeHandler::with_pages(client, conn, pages);
+    let handler = StdioBridgeHandler::with_pages(upstream, pages);
     let stdio = (tokio::io::stdin(), tokio::io::stdout());
     let service = handler.serve(stdio).await?;
 
@@ -63,6 +63,34 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
     }
 
     Ok(())
+}
+
+/// Resolve the connection and open a session over it.
+///
+/// The bridge is a transparent passthrough — skip the version gate so an old
+/// Desktop's "tool not found" surfaces verbatim to whatever upstream client
+/// (e.g. Claude Desktop) is using us, instead of being intercepted on the way
+/// in.
+async fn open_session(remote: bool, client: Option<String>) -> Result<Session> {
+    let conn = connection::resolve(None, None, false, remote, client.as_deref())?;
+    let client = McpClient::connect_passthrough(&conn).await?;
+    Ok(Session { client, conn })
+}
+
+/// Connect, and learn whether to advertise `pages`: only when the upstream
+/// does — it follows the account's Linkly AI Pages switch there, and an older
+/// Desktop has none.
+async fn connect_and_probe<F, Fut>(connect: &F) -> Result<(Session, bool)>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<Session>>,
+{
+    let Session { client, conn } = connect().await?;
+    let (client, pages) = probe_pages(client, PAGES_PROBE_TIMEOUT, || {
+        McpClient::connect_passthrough(&conn)
+    })
+    .await?;
+    Ok((Session { client, conn }, pages))
 }
 
 /// How long the bridge waits, before it starts, to learn whether the upstream

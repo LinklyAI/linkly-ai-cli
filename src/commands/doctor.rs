@@ -58,7 +58,7 @@ pub async fn run_from_args(
         // `--remote` / `--lan` without saved credentials fail like any other
         // check, but the JSON must not claim they were configured.
         let configured = match &mode {
-            ConnectionMode::Remote => !matches!(connection::read_credentials_api_key(), Ok(None)),
+            ConnectionMode::Remote => !matches!(connection::remote_api_key(), Ok(None)),
             ConnectionMode::Lan { saved: true, .. } => {
                 !matches!(connection::read_lan_credentials(), Ok(None))
             }
@@ -197,7 +197,7 @@ impl Group {
 async fn run_all(client: Option<&str>, json_mode: bool) -> Result<()> {
     // A corrupted credentials file counts as "configured": diagnosing it
     // surfaces the error instead of hiding it behind "not configured".
-    let remote_saved = !matches!(connection::read_credentials_api_key(), Ok(None));
+    let remote_saved = !matches!(connection::remote_api_key(), Ok(None));
     let lan_saved = !matches!(connection::read_lan_credentials(), Ok(None));
 
     // Run concurrently: the slowest connection sets the total time.

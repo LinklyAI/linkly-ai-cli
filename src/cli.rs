@@ -17,6 +17,7 @@ Connections (commands that read or write documents):
   `linkly doctor` checks all of them; notes always live on the Desktop machine.
 
 Environment:
+  LINKLY_API_KEY         key for --remote, ahead of the saved one
   LINKLY_CONFIG_DIR      where credentials live (default ~/.linkly); one directory = one account
   LINKLY_NO_SKILLS_HINT  set to 1 to silence the agent-skill update notice
   LINKLY_WEB_URL         override https://linkly.ai for `auth login` (development only)
@@ -423,7 +424,7 @@ exit code reflects only it.")]
         #[arg(long, hide = true, conflicts_with = "remote")]
         endpoint: Option<String>,
 
-        /// Bridge through the remote gateway (https://mcp.linkly.ai): your Desktop plus linked cloud libraries. Needs a saved key (`linkly auth login` or `set-key`)
+        /// Bridge through the remote gateway (https://mcp.linkly.ai): your Desktop plus linked cloud libraries. Needs a key (`linkly auth login`, `set-key`, or LINKLY_API_KEY)
         #[arg(long, conflicts_with = "endpoint")]
         remote: bool,
     },
