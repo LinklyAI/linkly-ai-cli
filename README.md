@@ -1,8 +1,35 @@
 # Linkly AI CLI
 
-Command-line interface for [Linkly AI](https://linkly.ai) — search your local documents from the terminal.
+Search and read the documents on your computer from the terminal, or give an AI agent the same access over MCP.
 
-The CLI connects to the Linkly AI desktop app's MCP server, giving you fast access to your indexed documents without leaving the terminal.
+## What is it?
+
+[Linkly AI](https://linkly.ai) is a desktop app for macOS, Windows and Linux that indexes the folders you choose: PDF, Word, PowerPoint, Excel, CSV, EPUB, RTF, Markdown, text, HTML, images (OCR), audio and video (speech transcription). The index stays on your computer, and every local feature is free without an account.
+
+`linkly` is its command line. It talks to the running desktop app, so there is nothing to index twice.
+
+**Use it to:**
+
+- search your files by keyword or by question, and read the result in the terminal or in scripts (`--json`)
+- let an agent with a terminal, such as Claude Code or Codex, search your files; the [official skill](https://github.com/LinklyAI/linkly-ai-skills) teaches it how
+- connect any MCP client over stdio with `linkly mcp`
+
+**How it differs from `grep` and `find`:** it reads inside PDFs, Office files, scans and recordings, matches meaning as well as keywords, and returns outlines so an agent can read only the sections it needs.
+
+## Quick Start
+
+1. [Download the desktop app](https://linkly.ai) and add a folder.
+2. Install the CLI ([all options](#installation)):
+
+   ```bash
+   curl -sSL https://updater.linkly.ai/cli/install.sh | sh
+   ```
+
+3. Search:
+
+   ```bash
+   linkly search "quarterly report"
+   ```
 
 ## Prerequisites
 
