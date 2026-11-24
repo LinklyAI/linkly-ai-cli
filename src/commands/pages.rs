@@ -5,9 +5,8 @@
 //! print the answer as it comes. Two things are done here: flag combinations
 //! the gateway would refuse are named in CLI spelling before the tool call
 //! (as `note-save` does), and a `save` with `--file-path` sends the file to
-//! the upload address its answer gives, printing the upload's answer the way
-//! `linkly pages upload` does (upload.rs), unless `--access` meets a Page that
-//! already exists.
+//! the upload address its answer gives and prints the upload's answer
+//! (upload.rs), unless `--access` meets a Page that already exists.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -44,13 +43,13 @@ pub struct PagesParams {
 
 impl PagesParams {
     /// The tool call for a `linkly pages` subcommand, and the connection it
-    /// goes on. `None` for `upload`, which is not a tool call (upload.rs).
-    pub fn from_action(action: PagesAction) -> Option<(Self, ConnectionArgs)> {
+    /// goes on.
+    pub fn from_action(action: PagesAction) -> (Self, ConnectionArgs) {
         let call = |action: &str| PagesParams {
             action: action.to_string(),
             ..Default::default()
         };
-        Some(match action {
+        match action {
             PagesAction::Save {
                 file_path,
                 content,
@@ -117,8 +116,7 @@ impl PagesParams {
                 },
                 conn,
             ),
-            PagesAction::Upload { .. } => return None,
-        })
+        }
     }
 }
 
@@ -258,17 +256,21 @@ fn local_file(raw: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// The line of a save's answer that says it makes a new Page, as the gateway writes it.
+/// The line of a save's answer that says it makes a new Page, as the gateway
+/// writes it; the Page's link follows it.
 const NEW_PAGE_LINE: &str = "Link to share (url), live once uploaded: ";
 
 /// The line of a save's answer for a new Page the Desktop will not recognize by
 /// its path next time: another connection, or a file in a temporary folder.
 const UPDATE_BY_URL_LINE: &str = "To update this Page later, pass its url with action=save.";
 
+/// Where a save's answer starts telling how to send the file.
+const UPLOAD_STEPS_LINE: &str = "Upload within ";
+
 /// The upload address in a save's answer: the one line that reads
 /// `PUT <address>` (the gateway keeps it alone on its line). `None` without
 /// such a line, or with more than one, which a file path with a line break in
-/// it could add: then nothing is sent and the answer is printed as it came.
+/// it could add.
 fn upload_address(answer: &str) -> Option<&str> {
     let mut addresses = answer
         .lines()
@@ -278,33 +280,87 @@ fn upload_address(answer: &str) -> Option<&str> {
     addresses.next().is_none().then_some(address)
 }
 
-/// Where this command sends the file itself: the upload address of a file
-/// save's answer. With `--access`, only for a new Page. Saving into an existing
-/// Page never changes its access, which may be wider than the one asked for;
-/// the answer says so before anything goes live, so it is printed as it came
-/// and the file is sent only after the user has seen it.
-fn address_to_upload<'a>(params: &PagesParams, answer: &'a str) -> Option<&'a str> {
-    params.file_path.as_ref()?;
-    if params.access.is_some() && !answer.lines().any(|line| line.starts_with(NEW_PAGE_LINE)) {
-        return None;
-    }
-    upload_address(answer)
+/// The link of the new Page a save's answer makes, when it makes one.
+fn new_page_link(answer: &str) -> Option<&str> {
+    answer
+        .lines()
+        .find_map(|line| line.strip_prefix(NEW_PAGE_LINE))
+        .map(str::trim)
 }
 
-/// Send the file a save registered and print the upload's answer, as
-/// `linkly pages upload` does. A failure comes with the save's answer, which
-/// keeps the address and the other ways to send the file (the browser link
-/// among them): running the save again would start another upload.
-async fn upload_file(address: &str, file: &Path, save_answer: &str, json_mode: bool) -> Result<()> {
-    let retry = format!(
-        "Retry with `linkly pages upload {address} \"{}\"`",
-        file.display()
-    );
-    let (text, answer) = match upload::upload(address, file, &retry).await {
+/// What a save of a file does once the gateway has answered.
+#[derive(Debug, PartialEq)]
+enum FileSave<'a> {
+    /// Send the file to this upload address.
+    Upload(&'a str),
+    /// `--access` met a Page that already exists. Saving never changes who can
+    /// open a Page, and that may be more people than asked for, so nothing is
+    /// sent until the user has seen it.
+    AccessKept,
+    /// The answer gives no single upload address.
+    NoAddress,
+}
+
+fn file_save<'a>(params: &PagesParams, answer: &'a str) -> FileSave<'a> {
+    if params.access.is_some() && new_page_link(answer).is_none() {
+        return FileSave::AccessKept;
+    }
+    upload_address(answer).map_or(FileSave::NoAddress, FileSave::Upload)
+}
+
+/// The lines of a save's answer before its upload steps: which Page, and who
+/// can open it. The whole answer when it has no upload steps.
+fn answer_before_upload_steps(answer: &str) -> String {
+    answer
+        .lines()
+        .take_while(|line| !line.starts_with(UPLOAD_STEPS_LINE))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Why nothing was sent when `--access` met a Page that already exists, what
+/// to run instead, and the answer's lines that name the Page and its access.
+fn access_kept_message(answer: &str) -> String {
+    format!(
+        "Nothing was uploaded: the file updates a Page that already exists, and saving never \
+         changes who can open a Page, so --access does not apply. To replace its content and \
+         keep who can open it, run the save again without --access; to change who can open it, \
+         run `linkly pages update` first.\n\n{}",
+        answer_before_upload_steps(answer)
+    )
+}
+
+/// How to send the file again after a failed upload: another save of the same
+/// Page, which starts a new upload. A new Page is named by its link, or the
+/// save would make a second one; `--access` goes, since the Page exists now.
+fn retry_advice(params: &PagesParams, answer: &str) -> String {
+    let link = params.url.as_deref().or_else(|| new_page_link(answer));
+    let how = match (link, params.url.is_some(), params.access.is_some()) {
+        (Some(link), _, true) => {
+            format!("run the same save again with --url {link} and without --access")
+        }
+        (Some(link), false, false) => format!("run the same save again with --url {link}"),
+        _ => "run the same save again".to_string(),
+    };
+    format!("To send the file again, {how}: it starts a new upload of the same Page.")
+}
+
+/// Send the file a save registered and print the upload's answer. A failure
+/// says how to send the file again, followed by the save's answer, which keeps
+/// the other ways to send it (curl, the browser link).
+async fn upload_file(
+    address: &str,
+    file: &Path,
+    params: &PagesParams,
+    save_answer: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let (text, answer) = match upload::upload(address, file).await {
         Ok(answer) => answer,
         Err(message) => {
             let message = format!(
-                "{message}\n\nThe save's answer, with the upload address and the other ways to send the file:\n{save_answer}"
+                "{message}\n{}\n\nThe save's answer, with the upload address and the other ways to send the file:\n{save_answer}",
+                retry_advice(params, save_answer)
             );
             return output::print_error(&message, json_mode);
         }
@@ -349,14 +405,20 @@ pub async fn run(
         Err(e) if is_unknown_tool(&e) => return output::print_error(NO_PAGES_TOOL, json_mode),
         Err(e) => return output::print_tool_error(&e, json_mode),
     };
-    match (&file, address_to_upload(&params, &text)) {
-        (Some(file), Some(address)) => upload_file(address, file, &text, json_mode).await,
-        // Text saved, a confirmation, any other action, `--access` meeting an
-        // existing Page, or an answer without an upload address: as it came.
-        _ => {
-            output::print_result(&text, json_mode);
-            Ok(())
-        }
+    let Some(file) = &file else {
+        // Text saved, a confirmation, or another action: the answer as it came.
+        output::print_result(&text, json_mode);
+        return Ok(());
+    };
+    match file_save(&params, &text) {
+        FileSave::Upload(address) => upload_file(address, file, &params, &text, json_mode).await,
+        FileSave::AccessKept => output::print_error(&access_kept_message(&text), json_mode),
+        FileSave::NoAddress => output::print_error(
+            &format!(
+                "Nothing was uploaded: the save's answer does not give one upload address.\n\n{text}"
+            ),
+            json_mode,
+        ),
     }
 }
 
@@ -419,7 +481,7 @@ mod tests {
     }
 
     /// The tool arguments `linkly <args>` sends; `None` when it is no tool call.
-    fn call(args: &[&str]) -> Option<serde_json::Value> {
+    fn call(args: &[&str]) -> serde_json::Value {
         use clap::Parser;
         let cli =
             crate::cli::Cli::try_parse_from(std::iter::once("linkly").chain(args.iter().copied()))
@@ -427,10 +489,9 @@ mod tests {
         let crate::cli::Command::Pages { action } = cli.command else {
             panic!("expected a pages command");
         };
-        PagesParams::from_action(action).map(|(params, _)| {
-            let content = params.content.clone();
-            arguments(&params, content)
-        })
+        let (params, _) = PagesParams::from_action(action);
+        let content = params.content.clone();
+        arguments(&params, content)
     }
 
     #[test]
@@ -445,35 +506,23 @@ mod tests {
                 "--content-type",
                 "markdown"
             ]),
-            Some(
-                serde_json::json!({"action": "save", "content": "# Hi", "content_type": "markdown"})
-            )
+            serde_json::json!({"action": "save", "content": "# Hi", "content_type": "markdown"})
         );
         assert_eq!(
             call(&["pages", "list", "--limit", "5"]),
-            Some(serde_json::json!({"action": "list", "limit": 5}))
+            serde_json::json!({"action": "list", "limit": 5})
         );
         assert_eq!(
             call(&["pages", "get", "--url", page]),
-            Some(serde_json::json!({"action": "get", "url": page}))
+            serde_json::json!({"action": "get", "url": page})
         );
         assert_eq!(
             call(&["pages", "update", "--url", page, "--access", "public"]),
-            Some(serde_json::json!({"action": "update", "url": page, "access": "public"}))
+            serde_json::json!({"action": "update", "url": page, "access": "public"})
         );
         assert_eq!(
             call(&["pages", "delete", "--url", page]),
-            Some(serde_json::json!({"action": "delete", "url": page}))
-        );
-        // upload talks to the upload address, not to the tool.
-        assert_eq!(
-            call(&[
-                "pages",
-                "upload",
-                "https://api.linkly.ai/v1/uploads/upl_x",
-                "q3.html"
-            ]),
-            None
+            serde_json::json!({"action": "delete", "url": page})
         );
     }
 
@@ -642,7 +691,7 @@ Upload within 30 minutes, up to 10 MB:
   PUT https://api.linkly.ai/v1/uploads/upl_q7Vn3kPx9-2bZ0aLmR4tY8wE1sD6fG5hJ3kL9pO0iU2
   Body: the raw bytes of /Users/me/q3-growth.html. Not multipart, not base64.";
 
-    fn file_save(access: Option<&str>) -> PagesParams {
+    fn file_params(access: Option<&str>) -> PagesParams {
         PagesParams {
             file_path: Some("/Users/me/q3-growth.html".into()),
             access: access.map(Into::into),
@@ -653,32 +702,94 @@ Upload within 30 minutes, up to 10 MB:
     #[test]
     fn a_file_save_uploads_to_the_address_of_its_answer() {
         assert_eq!(
-            address_to_upload(&file_save(None), SAVE_ANSWER),
-            Some(
+            file_save(&file_params(None), SAVE_ANSWER),
+            FileSave::Upload(
                 "https://api.linkly.ai/v1/uploads/upl_q7Vn3kPx9-2bZ0aLmR4tY8wE1sD6fG5hJ3kL9pO0iU2"
             )
         );
         // New content for a Page that exists, no access asked: it goes up too.
-        assert!(address_to_upload(&file_save(None), UPDATE_ANSWER).is_some());
+        assert!(matches!(
+            file_save(&file_params(None), UPDATE_ANSWER),
+            FileSave::Upload(_)
+        ));
     }
 
     #[test]
     fn with_access_it_uploads_into_a_new_page_only() {
-        assert!(address_to_upload(&file_save(Some("public")), SAVE_ANSWER).is_some());
-        // The Page exists, its access stays (public here, private asked): the
-        // answer is printed first and nothing goes live.
+        assert!(matches!(
+            file_save(&file_params(Some("public")), SAVE_ANSWER),
+            FileSave::Upload(_)
+        ));
+        // The Page exists and keeps its access (public here, private asked):
+        // nothing goes live before the user has seen that.
         assert_eq!(
-            address_to_upload(&file_save(Some("private")), UPDATE_ANSWER),
-            None
+            file_save(&file_params(Some("private")), UPDATE_ANSWER),
+            FileSave::AccessKept
         );
     }
 
     #[test]
-    fn a_save_without_a_file_uploads_nothing() {
-        let mut text = params("save");
-        text.content = Some("# Q3".into());
-        text.content_type = Some("markdown".into());
-        assert_eq!(address_to_upload(&text, SAVE_ANSWER), None);
+    fn an_answer_without_its_upload_address_sends_nothing() {
+        let answer = SAVE_ANSWER.replace(
+            "  PUT https://api.linkly.ai/v1/uploads/",
+            "  PUT https://uploads.example.com/",
+        );
+        assert_eq!(file_save(&file_params(None), &answer), FileSave::NoAddress);
+    }
+
+    #[test]
+    fn the_new_page_link_is_read_from_its_line() {
+        assert_eq!(
+            new_page_link(SAVE_ANSWER),
+            Some("https://alicia.linklyai.page/q3-growth")
+        );
+        assert_eq!(new_page_link(UPDATE_ANSWER), None);
+    }
+
+    #[test]
+    fn a_page_kept_access_says_why_and_shows_the_page_but_not_the_upload_steps() {
+        let message = access_kept_message(UPDATE_ANSWER);
+        assert!(message
+            .starts_with("Nothing was uploaded: the file updates a Page that already exists"));
+        assert!(message.contains("run the save again without --access"));
+        assert!(message.ends_with("The access you passed was not applied."));
+        assert!(!message.contains("PUT "));
+    }
+
+    #[test]
+    fn an_answer_without_upload_steps_is_kept_whole() {
+        assert_eq!(
+            answer_before_upload_steps("Published: x\nTell the user both links."),
+            "Published: x\nTell the user both links."
+        );
+    }
+
+    #[test]
+    fn a_retry_of_a_new_page_names_it_by_its_link() {
+        assert_eq!(
+            retry_advice(&file_params(None), SAVE_ANSWER),
+            "To send the file again, run the same save again with --url https://alicia.linklyai.page/q3-growth: it starts a new upload of the same Page."
+        );
+        // The Page exists now: --access would stop the next save from uploading.
+        assert_eq!(
+            retry_advice(&file_params(Some("public")), SAVE_ANSWER),
+            "To send the file again, run the same save again with --url https://alicia.linklyai.page/q3-growth and without --access: it starts a new upload of the same Page."
+        );
+    }
+
+    #[test]
+    fn a_retry_of_a_page_already_named_or_found_is_the_same_save() {
+        let mut by_url = file_params(None);
+        by_url.url = Some("https://alicia.linklyai.page/q3-growth".into());
+        assert_eq!(
+            retry_advice(&by_url, UPDATE_ANSWER),
+            "To send the file again, run the same save again: it starts a new upload of the same Page."
+        );
+        // Found by the same file: the same save finds it again.
+        assert_eq!(
+            retry_advice(&file_params(None), UPDATE_ANSWER),
+            "To send the file again, run the same save again: it starts a new upload of the same Page."
+        );
     }
 
     #[cfg(unix)]

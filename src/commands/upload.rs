@@ -1,19 +1,14 @@
-//! `linkly pages upload <address> <file>` — send a file's raw bytes to a Linkly AI
-//! Pages upload address.
+//! How `linkly pages save --file-path` sends the file: its raw bytes, to the
+//! Linkly AI Pages upload address the save's answer gives (pages.rs).
 //!
-//! The `pages` tool's `save` answers with an upload address; agents that can
-//! run commands upload with this (or curl), and `linkly pages save --file-path`
-//! uploads through the same code. It talks to the upload endpoint directly, not
-//! to the Desktop or the MCP gateway, and streams the file — it never holds a
-//! 100 MB file in memory.
+//! It talks to the upload endpoint directly, not to the Desktop or the MCP
+//! gateway, and streams the file — it never holds a 100 MB file in memory.
 //!
-//! The address must be a Linkly AI one: a tool answer an injected document
-//! steered could otherwise send a local file anywhere.
+//! The address must be a Linkly AI one: an answer an injected document steered
+//! could otherwise send a local file anywhere.
 
 use std::path::Path;
 use std::time::Duration;
-
-use anyhow::Result;
 
 use crate::{http, output};
 
@@ -23,10 +18,6 @@ const UPLOAD_PREFIX: &str = "https://api.linkly.ai/v1/uploads/";
 /// The whole upload, however slow the line: an upload address is good for 30 minutes.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// How a failure that sending the file again fixes begins its advice, for
-/// this command.
-const RETRY_SAME_COMMAND: &str = "Retry the same command";
 
 /// Whether `address` is a Linkly AI upload address: the prefix, then the
 /// token (`upl_` + base64url), nothing else.
@@ -41,33 +32,14 @@ pub(crate) fn is_upload_address(address: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-pub async fn run(address: &str, file: &Path, json_mode: bool) -> Result<()> {
-    if !is_upload_address(address) {
-        return output::print_error(
-            &format!(
-                "Not a Linkly AI upload address: it must start with {UPLOAD_PREFIX}upl_. \
-                 Use the address from the pages tool's save answer."
-            ),
-            json_mode,
-        );
-    }
-    let (text, answer) = match upload(address, file, RETRY_SAME_COMMAND).await {
-        Ok(answer) => answer,
-        Err(message) => return output::print_error(&message, json_mode),
-    };
-    print_answer(&text, &answer, json_mode);
-    Ok(())
-}
-
 /// Send `file` to `address` and read the endpoint's answer: the answer as it
-/// came, parsed too, or what to tell the user. `retry` begins the advice for
-/// the failures that sending the file again fixes.
+/// came, parsed too, or what went wrong. How to try again is the caller's to
+/// say.
 pub(crate) async fn upload(
     address: &str,
     file: &Path,
-    retry: &str,
 ) -> Result<(String, serde_json::Value), String> {
-    let (status, text) = send(address, file, retry).await?;
+    let (status, text) = send(address, file).await?;
     let answer: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     if !status.is_success() {
         let message = answer
@@ -82,9 +54,7 @@ pub(crate) async fn upload(
         return Err(format!("{code}: {message}"));
     }
     if !is_upload_answer(&answer) {
-        return Err(format!(
-            "The upload's answer could not be read. {retry}: the address answers again."
-        ));
+        return Err("The upload's answer could not be read.".to_string());
     }
     Ok((text, answer))
 }
@@ -116,11 +86,7 @@ fn is_upload_answer(answer: &serde_json::Value) -> bool {
 
 /// PUT `file` to `address`: the endpoint's status and its whole answer, or
 /// what to tell the user when there is none.
-async fn send(
-    address: &str,
-    file: &Path,
-    retry: &str,
-) -> Result<(reqwest::StatusCode, String), String> {
+async fn send(address: &str, file: &Path) -> Result<(reqwest::StatusCode, String), String> {
     let size = match tokio::fs::metadata(file).await {
         Ok(meta) if meta.is_file() => meta.len(),
         Ok(_) => return Err(format!("{} is not a file", file.display())),
@@ -141,21 +107,13 @@ async fn send(
         .body(reqwest::Body::from(handle))
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "Upload failed: {}. {retry}: the address takes the file again until it succeeds.",
-                e.without_url()
-            )
-        })?;
+        .map_err(|e| format!("Upload failed: {}.", e.without_url()))?;
     let status = response.status();
-    // Cut off on the way back, the answer is lost, not the upload: sending
-    // the file again is answered again.
-    let text = response.text().await.map_err(|e| {
-        format!(
-            "The upload's answer was cut off: {}. {retry}: the address answers again.",
-            e.without_url()
-        )
-    })?;
+    // Cut off on the way back, the answer is lost, not necessarily the upload.
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("The upload's answer was cut off: {}.", e.without_url()))?;
     Ok((status, text))
 }
 
@@ -281,19 +239,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_answer_cut_off_on_the_way_back_is_a_failure_to_retry() {
+    async fn an_answer_cut_off_on_the_way_back_is_a_failure() {
         let file = temp_file(b"hello pages");
         let url = answer_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{\"status\":").await;
 
-        let error = send(&url, file.path(), RETRY_SAME_COMMAND)
-            .await
-            .unwrap_err();
+        let error = send(&url, file.path()).await.unwrap_err();
 
         assert!(
             error.starts_with("The upload's answer was cut off"),
             "{error}"
         );
-        assert!(error.contains("Retry the same command"), "{error}");
+        // How to try again is the save's to say (pages.rs).
+        assert!(!error.contains("Retry"), "{error}");
     }
 
     #[tokio::test]
@@ -301,27 +258,10 @@ mod tests {
         let file = temp_file(b"hello pages");
         let url = answer_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 31\r\nconnection: close\r\n\r\n{\"status\":\"needs_confirmation\"}").await;
 
-        let (status, text) = send(&url, file.path(), RETRY_SAME_COMMAND)
-            .await
-            .expect("answered");
+        let (status, text) = send(&url, file.path()).await.expect("answered");
 
         assert_eq!(status, reqwest::StatusCode::OK);
         assert_eq!(text, r#"{"status":"needs_confirmation"}"#);
-    }
-
-    #[tokio::test]
-    async fn a_failure_to_retry_gives_the_retry_it_was_handed() {
-        // `linkly pages save` uploads too, but running it again would start
-        // another upload: its failures name the upload command instead.
-        let file = temp_file(b"hello pages");
-        let url = answer_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{\"status\":").await;
-        let retry =
-            "Retry with `linkly pages upload https://api.linkly.ai/v1/uploads/upl_x \"/a/q3.md\"`";
-
-        let error = upload(&url, file.path(), retry).await.unwrap_err();
-
-        assert!(error.contains(retry), "{error}");
-        assert!(!error.contains("Retry the same command"), "{error}");
     }
 
     #[tokio::test]
@@ -329,9 +269,7 @@ mod tests {
         let file = temp_file(b"hello pages");
         let url = answer_once(b"HTTP/1.1 413 Payload Too Large\r\ncontent-type: application/json\r\ncontent-length: 60\r\nconnection: close\r\n\r\n{\"error\":\"file_too_large\",\"message\":\"Over the 10 MB limit.\"}").await;
 
-        let error = upload(&url, file.path(), RETRY_SAME_COMMAND)
-            .await
-            .unwrap_err();
+        let error = upload(&url, file.path()).await.unwrap_err();
 
         assert_eq!(error, "file_too_large: Over the 10 MB limit.");
     }
@@ -341,9 +279,7 @@ mod tests {
         let file = temp_file(b"hello pages");
         let url = answer_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 40\r\nconnection: close\r\n\r\n{\"status\":\"published\",\"access\":\"public\"}").await;
 
-        let (text, answer) = upload(&url, file.path(), RETRY_SAME_COMMAND)
-            .await
-            .expect("answered");
+        let (text, answer) = upload(&url, file.path()).await.expect("answered");
 
         assert_eq!(text, r#"{"status":"published","access":"public"}"#);
         assert_eq!(answer["access"], "public");

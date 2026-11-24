@@ -381,11 +381,10 @@ block reports total, has_more and next_annotations_offset.")]
     /// Linkly AI Pages: publish a file or text as a web page, and manage your Pages
     ///
     /// Pages live at https://<username>.linklyai.page/<slug>. `linkly pages save
-    /// --file-path <file>` uploads the file and prints the links; `linkly pages
-    /// upload` sends a file to an upload address from the pages tool's answer.
-    /// New Pages are private: only you can open them. Public Pages can be opened by
-    /// anyone and may appear in search engines; password Pages need Pro, and
-    /// passwords are made only at linkly.ai
+    /// --file-path <file>` publishes the file, upload included, and prints the
+    /// links. New Pages are private: only you can open them. Public Pages can be
+    /// opened by anyone and may appear in search engines; password Pages need Pro,
+    /// and passwords are made only at linkly.ai
     Pages {
         #[command(subcommand)]
         action: PagesAction,
@@ -476,8 +475,8 @@ too.")]
     },
 }
 
-/// `linkly pages <action>`: the `pages` tool's actions, plus `upload` for the
-/// file a save asks for. The flags are the tool's parameters.
+/// `linkly pages <action>`: the `pages` tool's actions. The flags are the
+/// tool's parameters.
 #[derive(Subcommand)]
 pub enum PagesAction {
     /// Publish a file or text as a Page, or replace the content of the Page given in --url
@@ -573,23 +572,6 @@ pub enum PagesAction {
 
         #[command(flatten)]
         conn: ConnectionArgs,
-    },
-
-    /// Send a file to an upload address from the pages tool's answer
-    ///
-    /// `linkly pages save --file-path` uploads by itself; this is for an address
-    /// the MCP tool gave, or to retry an upload a save could not finish. Sends the
-    /// raw bytes with an HTTP PUT straight to that address, so it takes no
-    /// connection flags. Only addresses that start with
-    /// https://api.linkly.ai/v1/uploads/upl_ are accepted. Retrying the same
-    /// command is safe until the address expires (30 minutes)
-    Upload {
-        /// The upload address (https://api.linkly.ai/v1/uploads/upl_…)
-        address: String,
-
-        /// The file to send
-        #[arg(value_hint = clap::ValueHint::FilePath)]
-        file: std::path::PathBuf,
     },
 }
 
@@ -998,7 +980,7 @@ mod tests {
 
     #[test]
     fn pages_actions_are_subcommands() {
-        // `linkly pages <action>`: the tool's actions, plus upload.
+        // `linkly pages <action>`: the tool's actions; a save uploads its file itself.
         let page = "https://alicia.linklyai.page/q3-k2m4";
         let address = "https://api.linkly.ai/v1/uploads/upl_x";
         assert!(parse(&["pages", "save", "--file-path", "/Users/me/q3.html"]).is_ok());
@@ -1010,7 +992,7 @@ mod tests {
         // `pages_access_and_content_type_values_are_not_frozen_at_the_cli_layer`).
         assert!(parse(&["pages", "save", "--content", "x", "--access", "password"]).is_ok());
         assert!(parse(&["pages", "delete", "--url", page]).is_ok());
-        assert!(parse(&["pages", "upload", address, "q3.html"]).is_ok());
+        assert!(parse(&["pages", "upload", address, "q3.html"]).is_err());
         // get, update and delete name the Page; no --action, no top-level upload.
         assert!(parse(&["pages", "get"]).is_err());
         assert!(parse(&["pages", "update", "--access", "public"]).is_err());
