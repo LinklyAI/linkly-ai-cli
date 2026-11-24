@@ -501,7 +501,7 @@ pub enum PagesAction {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         description: Option<String>,
 
-        /// Who can open a new Page: private (the default) or public. Saving into an existing Page never changes it; use `linkly pages update`
+        /// Who can open a new Page: private (the default) or public. Not with --url: saving into an existing Page never changes it; use `linkly pages update`
         #[arg(long, value_hint = clap::ValueHint::Other)]
         access: Option<String>,
 

@@ -424,9 +424,12 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         }
         Command::Pages { action } => {
             let (params, conn) = commands::pages::PagesParams::from_action(action);
+            // The flags and the file are checked before connecting: a mistake is
+            // reported even when the Desktop is not running.
+            let call = commands::pages::prepare(params, json_mode)?;
             let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::pages::run(&client, &conn, params, json_mode)
+            commands::pages::run(&client, &conn, call, json_mode)
                 .await
                 .map(found)
         }

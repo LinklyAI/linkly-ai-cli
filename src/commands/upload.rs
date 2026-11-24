@@ -18,6 +18,8 @@ const UPLOAD_PREFIX: &str = "https://api.linkly.ai/v1/uploads/";
 /// The whole upload, however slow the line: an upload address is good for 30 minutes.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Cancelling is a small request; it does not hold the command up for long.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Whether `address` is a Linkly AI upload address: the prefix, then the
 /// token (`upl_` + base64url), nothing else.
@@ -32,13 +34,38 @@ pub(crate) fn is_upload_address(address: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Why an upload did not finish.
+#[derive(Debug)]
+pub(crate) struct UploadFailure {
+    /// What went wrong, for the user.
+    pub message: String,
+    /// Whether another try can work: the connection or the answer failed, or
+    /// the endpoint asked to try again. Not when the file itself is refused.
+    pub retry: bool,
+}
+
+impl UploadFailure {
+    fn new(message: String, retry: bool) -> Self {
+        UploadFailure { message, retry }
+    }
+}
+
+/// Endpoint errors another try can fix: the body or the service failed, the
+/// limiter asked to wait, or the address expired (a new save gives a new one).
+const RETRYABLE_ERRORS: &[&str] = &[
+    "incomplete_body",
+    "temporarily_unavailable",
+    "rate_limited",
+    "expired",
+];
+
 /// Send `file` to `address` and read the endpoint's answer: the answer as it
 /// came, parsed too, or what went wrong. How to try again is the caller's to
 /// say.
 pub(crate) async fn upload(
     address: &str,
     file: &Path,
-) -> Result<(String, serde_json::Value), String> {
+) -> Result<(String, serde_json::Value), UploadFailure> {
     let (status, text) = send(address, file).await?;
     let answer: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
     if !status.is_success() {
@@ -47,16 +74,35 @@ pub(crate) async fn upload(
             .and_then(|m| m.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| format!("HTTP {status}"));
-        let code = answer
-            .get("error")
-            .and_then(|c| c.as_str())
-            .unwrap_or("upload_failed");
-        return Err(format!("{code}: {message}"));
+        let code = answer.get("error").and_then(|c| c.as_str());
+        let retry = match code {
+            Some(code) => RETRYABLE_ERRORS.contains(&code),
+            None => status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS,
+        };
+        let code = code.unwrap_or("upload_failed");
+        return Err(UploadFailure::new(format!("{code}: {message}"), retry));
     }
     if !is_upload_answer(&answer) {
-        return Err("The upload's answer could not be read.".to_string());
+        return Err(UploadFailure::new(
+            "The upload's answer could not be read.".to_string(),
+            true,
+        ));
     }
     Ok((text, answer))
+}
+
+/// Cancel the upload at `address`, to which nothing will be sent, so that it
+/// stops counting toward the uploads waiting for a file. Best effort: an upload
+/// left behind expires in 30 minutes anyway.
+pub(crate) async fn cancel(address: &str) {
+    let Ok(client) = http::client_builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(CANCEL_TIMEOUT)
+        .build()
+    else {
+        return;
+    };
+    let _ = client.post(format!("{address}/cancel")).send().await;
 }
 
 /// Print an upload's answer.
@@ -86,20 +132,30 @@ fn is_upload_answer(answer: &serde_json::Value) -> bool {
 
 /// PUT `file` to `address`: the endpoint's status and its whole answer, or
 /// what to tell the user when there is none.
-async fn send(address: &str, file: &Path) -> Result<(reqwest::StatusCode, String), String> {
+async fn send(address: &str, file: &Path) -> Result<(reqwest::StatusCode, String), UploadFailure> {
     let size = match tokio::fs::metadata(file).await {
         Ok(meta) if meta.is_file() => meta.len(),
-        Ok(_) => return Err(format!("{} is not a file", file.display())),
-        Err(e) => return Err(format!("Cannot read {}: {e}", file.display())),
+        Ok(_) => {
+            return Err(UploadFailure::new(
+                format!("{} is not a file", file.display()),
+                false,
+            ))
+        }
+        Err(e) => {
+            return Err(UploadFailure::new(
+                format!("Cannot read {}: {e}", file.display()),
+                false,
+            ))
+        }
     };
     let handle = tokio::fs::File::open(file)
         .await
-        .map_err(|e| format!("Cannot read {}: {e}", file.display()))?;
+        .map_err(|e| UploadFailure::new(format!("Cannot read {}: {e}", file.display()), false))?;
     let client = http::client_builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(UPLOAD_TIMEOUT)
         .build()
-        .map_err(|e| format!("Upload failed: {e}"))?;
+        .map_err(|e| UploadFailure::new(format!("Upload failed: {e}"), false))?;
     let response = client
         .put(address)
         .header(reqwest::header::CONTENT_LENGTH, size)
@@ -107,13 +163,15 @@ async fn send(address: &str, file: &Path) -> Result<(reqwest::StatusCode, String
         .body(reqwest::Body::from(handle))
         .send()
         .await
-        .map_err(|e| format!("Upload failed: {}.", e.without_url()))?;
+        .map_err(|e| UploadFailure::new(format!("Upload failed: {}.", e.without_url()), true))?;
     let status = response.status();
     // Cut off on the way back, the answer is lost, not necessarily the upload.
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("The upload's answer was cut off: {}.", e.without_url()))?;
+    let text = response.text().await.map_err(|e| {
+        UploadFailure::new(
+            format!("The upload's answer was cut off: {}.", e.without_url()),
+            true,
+        )
+    })?;
     Ok((status, text))
 }
 
@@ -232,6 +290,26 @@ mod tests {
         format!("http://{addr}/v1/uploads/upl_test")
     }
 
+    /// A server that takes one request, writes `response` back, and hands over
+    /// the request line it got.
+    async fn record_once(
+        response: &'static [u8],
+    ) -> (String, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (seen, request_line) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = socket.read(&mut buf).await.unwrap();
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = seen.send(head.lines().next().unwrap_or("").to_string());
+            socket.write_all(response).await.unwrap();
+        });
+        (format!("http://{addr}/v1/uploads/upl_test"), request_line)
+    }
+
     fn temp_file(bytes: &[u8]) -> tempfile::NamedTempFile {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         std::io::Write::write_all(&mut file, bytes).unwrap();
@@ -246,11 +324,13 @@ mod tests {
         let error = send(&url, file.path()).await.unwrap_err();
 
         assert!(
-            error.starts_with("The upload's answer was cut off"),
-            "{error}"
+            error.message.starts_with("The upload's answer was cut off"),
+            "{}",
+            error.message
         );
         // How to try again is the save's to say (pages.rs).
-        assert!(!error.contains("Retry"), "{error}");
+        assert!(!error.message.contains("Retry"), "{}", error.message);
+        assert!(error.retry);
     }
 
     #[tokio::test]
@@ -271,7 +351,49 @@ mod tests {
 
         let error = upload(&url, file.path()).await.unwrap_err();
 
-        assert_eq!(error, "file_too_large: Over the 10 MB limit.");
+        assert_eq!(error.message, "file_too_large: Over the 10 MB limit.");
+        // The same file is refused again: no retry is offered.
+        assert!(!error.retry);
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_error_that_asks_for_another_try_can_be_retried() {
+        let file = temp_file(b"hello pages");
+        let url = answer_once(b"HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: 102\r\nconnection: close\r\n\r\n{\"error\":\"temporarily_unavailable\",\"message\":\"The upload could not be processed. Retry the same PUT.\"}").await;
+
+        let error = upload(&url, file.path()).await.unwrap_err();
+
+        assert!(error.message.starts_with("temporarily_unavailable: "));
+        assert!(error.retry);
+    }
+
+    #[tokio::test]
+    async fn a_server_error_without_its_json_can_be_retried() {
+        let file = temp_file(b"hello pages");
+        let url = answer_once(b"HTTP/1.1 502 Bad Gateway\r\ncontent-type: text/plain\r\ncontent-length: 11\r\nconnection: close\r\n\r\nbad gateway").await;
+
+        let error = upload(&url, file.path()).await.unwrap_err();
+
+        assert_eq!(error.message, "upload_failed: HTTP 502 Bad Gateway");
+        assert!(error.retry);
+    }
+
+    #[tokio::test]
+    async fn cancel_posts_to_the_cancel_address_of_the_upload() {
+        let (url, request_line) = record_once(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 22\r\nconnection: close\r\n\r\n{\"status\":\"cancelled\"}").await;
+
+        cancel(&url).await;
+
+        assert_eq!(
+            request_line.await.unwrap(),
+            "POST /v1/uploads/upl_test/cancel HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_that_cannot_reach_the_endpoint_returns_quietly() {
+        // Nothing listens there: the upload expires on its own.
+        cancel("http://127.0.0.1:9/v1/uploads/upl_test").await;
     }
 
     #[tokio::test]

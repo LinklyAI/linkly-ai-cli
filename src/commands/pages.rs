@@ -160,7 +160,7 @@ fn arguments(params: &PagesParams, content: Option<String>) -> serde_json::Value
 
 /// The flag combinations the gateway refuses, named in CLI spelling. Only the
 /// combinations: what the values may be stays the gateway's to check.
-fn combination_error(params: &PagesParams) -> Option<&'static str> {
+fn combination_error(params: &PagesParams) -> Option<String> {
     match params.action.as_str() {
         "save" => save_combination_error(params),
         "update"
@@ -170,44 +170,59 @@ fn combination_error(params: &PagesParams) -> Option<&'static str> {
         {
             Some(
                 "update needs at least one of --title, --description, --access. To replace the \
-                 content, use `linkly pages save --url <url> --file-path <file>`.",
+                 content, use `linkly pages save --url <url> --file-path <file>`."
+                    .to_string(),
             )
         }
         _ => None,
     }
 }
 
-fn save_combination_error(params: &PagesParams) -> Option<&'static str> {
+fn save_combination_error(params: &PagesParams) -> Option<String> {
     let has_file = params.file_path.is_some();
     let has_text = params.content.is_some();
     if has_file && has_text {
-        return Some("Pass --file-path or --content, not both.");
+        return Some("Pass --file-path or --content, not both.".to_string());
+    }
+    // --url names a Page that exists, and a save never changes who can open
+    // it: refused rather than dropped, so new content never goes live to more
+    // people than asked for.
+    if let (Some(url), Some(access)) = (&params.url, &params.access) {
+        return Some(format!(
+            "--access is for a new Page, and --url names one that exists: saving never changes \
+             who can open it. To change that, run `linkly pages update --url {url} --access {access}`."
+        ));
     }
     if params.confirm_sensitive.is_some() {
         if params.url.is_none() {
-            return Some("--confirm-sensitive needs --url: the Page whose held upload to publish.");
+            return Some(
+                "--confirm-sensitive needs --url: the Page whose held upload to publish."
+                    .to_string(),
+            );
         }
         if has_file || has_text {
             return Some(
                 "--confirm-sensitive publishes the upload held on the Page at --url; leave out \
-                 --file-path and --content.",
+                 --file-path and --content."
+                    .to_string(),
             );
         }
         return None;
     }
     if !has_file && !has_text {
         return Some(if params.url.is_none() {
-            "save needs --file-path (a file to publish) or --content (the text itself)."
+            "save needs --file-path (a file to publish) or --content (the text itself).".to_string()
         } else {
             "save with --url needs --file-path or --content: the new content. To change the \
              title, description or access, use `linkly pages update`."
+                .to_string()
         });
     }
     if has_text && params.content_type.is_none() {
-        return Some("--content needs --content-type: markdown or html.");
+        return Some("--content needs --content-type: markdown or html.".to_string());
     }
     if !has_text && params.content_type.is_some() {
-        return Some("--content-type goes with --content.");
+        return Some("--content-type goes with --content.".to_string());
     }
     None
 }
@@ -346,8 +361,8 @@ fn retry_advice(params: &PagesParams, answer: &str) -> String {
 }
 
 /// Send the file a save registered and print the upload's answer. A failure
-/// says how to send the file again, followed by the save's answer, which keeps
-/// the other ways to send it (curl, the browser link).
+/// says how to send the file again when another try can work, followed by the
+/// save's answer, which keeps the other ways to send it (curl, the browser link).
 async fn upload_file(
     address: &str,
     file: &Path,
@@ -357,11 +372,16 @@ async fn upload_file(
 ) -> Result<()> {
     let (text, answer) = match upload::upload(address, file).await {
         Ok(answer) => answer,
-        Err(message) => {
-            let message = format!(
-                "{message}\n{}\n\nThe save's answer, with the upload address and the other ways to send the file:\n{save_answer}",
-                retry_advice(params, save_answer)
+        Err(failure) => {
+            let mut message = failure.message;
+            if failure.retry {
+                message.push('\n');
+                message.push_str(&retry_advice(params, save_answer));
+            }
+            message.push_str(
+                "\n\nThe save's answer, with the upload address and the other ways to send the file:\n",
             );
+            message.push_str(save_answer);
             return output::print_error(&message, json_mode);
         }
     };
@@ -376,16 +396,31 @@ async fn upload_file(
     Ok(())
 }
 
-pub async fn run(
-    client: &McpClient,
-    conn: &ConnectionInfo,
-    mut params: PagesParams,
-    json_mode: bool,
-) -> Result<()> {
-    // Every check on the flags runs before `--content -` reads stdin, so a
-    // mistake never drains a pipe the producer cannot replay (as note-save).
+/// The gateway's reason for refusing the arguments (JSON-RPC -32602): it says
+/// what to fix. The rest of that error is written for MCP clients.
+fn invalid_params_reason(err: &anyhow::Error) -> Option<&str> {
+    let error = err.downcast_ref::<crate::client::ToolError>()?;
+    if error.code != -32602 {
+        return None;
+    }
+    error.data.as_ref()?.get("reason")?.as_str()
+}
+
+/// A `linkly pages` call checked and ready to send.
+pub struct PagesCall {
+    params: PagesParams,
+    /// The file a save publishes, under its absolute path.
+    file: Option<PathBuf>,
+    args: serde_json::Value,
+}
+
+/// Check the flags and the file and read `--content -`, before anything
+/// connects: a mistake is reported even when the Desktop is not running. The
+/// flags are checked before stdin is read, so a mistake never drains a pipe
+/// the producer cannot replay (as note-save).
+pub fn prepare(mut params: PagesParams, json_mode: bool) -> Result<PagesCall> {
     if let Some(message) = combination_error(&params) {
-        return output::print_error(message, json_mode);
+        return output::print_error(&message, json_mode);
     }
     let file = match params.file_path.as_deref().map(local_file).transpose() {
         Ok(file) => file,
@@ -400,10 +435,26 @@ pub async fn run(
         Err(e) => return output::print_error(&e.to_string(), json_mode),
     };
     let args = arguments(&params, content);
+    Ok(PagesCall { params, file, args })
+}
+
+pub async fn run(
+    client: &McpClient,
+    conn: &ConnectionInfo,
+    call: PagesCall,
+    json_mode: bool,
+) -> Result<()> {
+    let PagesCall { params, file, args } = call;
     let text = match client.call_tool("pages", args, conn).await {
         Ok(text) => text,
         Err(e) if is_unknown_tool(&e) => return output::print_error(NO_PAGES_TOOL, json_mode),
-        Err(e) => return output::print_tool_error(&e, json_mode),
+        Err(e) => {
+            // Text mode prints the reason alone; `--json` keeps the whole error.
+            if let (false, Some(reason)) = (json_mode, invalid_params_reason(&e)) {
+                return output::print_error(reason, json_mode);
+            }
+            return output::print_tool_error(&e, json_mode);
+        }
     };
     let Some(file) = &file else {
         // Text saved, a confirmation, or another action: the answer as it came.
@@ -412,7 +463,14 @@ pub async fn run(
     };
     match file_save(&params, &text) {
         FileSave::Upload(address) => upload_file(address, file, &params, &text, json_mode).await,
-        FileSave::AccessKept => output::print_error(&access_kept_message(&text), json_mode),
+        FileSave::AccessKept => {
+            // Nothing will be sent to the upload this save registered: cancel it,
+            // so that it stops counting toward the uploads waiting for a file.
+            if let Some(address) = upload_address(&text) {
+                upload::cancel(address).await;
+            }
+            output::print_error(&access_kept_message(&text), json_mode)
+        }
         FileSave::NoAddress => output::print_error(
             &format!(
                 "Nothing was uploaded: the save's answer does not give one upload address.\n\n{text}"
@@ -529,7 +587,7 @@ mod tests {
     #[test]
     fn a_save_needs_a_file_or_the_text() {
         assert_eq!(
-            combination_error(&params("save")),
+            combination_error(&params("save")).as_deref(),
             Some("save needs --file-path (a file to publish) or --content (the text itself).")
         );
         let mut by_url = params("save");
@@ -545,7 +603,7 @@ mod tests {
         both.content = Some("# Q3".into());
         both.content_type = Some("markdown".into());
         assert_eq!(
-            combination_error(&both),
+            combination_error(&both).as_deref(),
             Some("Pass --file-path or --content, not both.")
         );
     }
@@ -555,14 +613,14 @@ mod tests {
         let mut text = params("save");
         text.content = Some("# Q3".into());
         assert_eq!(
-            combination_error(&text),
+            combination_error(&text).as_deref(),
             Some("--content needs --content-type: markdown or html.")
         );
         let mut type_only = params("save");
         type_only.file_path = Some("/Users/me/q3.md".into());
         type_only.content_type = Some("markdown".into());
         assert_eq!(
-            combination_error(&type_only),
+            combination_error(&type_only).as_deref(),
             Some("--content-type goes with --content.")
         );
     }
@@ -572,7 +630,7 @@ mod tests {
         let mut no_url = params("save");
         no_url.confirm_sensitive = Some("0d4e3a9c-1111-4000-8000-000000000003".into());
         assert_eq!(
-            combination_error(&no_url),
+            combination_error(&no_url).as_deref(),
             Some("--confirm-sensitive needs --url: the Page whose held upload to publish.")
         );
         let mut with_file = params("save");
@@ -799,5 +857,91 @@ Upload within 30 minutes, up to 10 MB:
         let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/home/me/r\xe9sum\xe9/q3.md"));
         assert!(utf8_path(path).is_err_and(|message| message.contains("is not a UTF-8 path")));
         assert!(utf8_path(PathBuf::from("/home/me/résumé/q3.md")).is_ok());
+    }
+
+    #[test]
+    fn a_save_into_a_page_named_by_url_refuses_access() {
+        let url = "https://alicia.linklyai.page/q3-growth";
+        let expected = "--access is for a new Page, and --url names one that exists: saving never \
+             changes who can open it. To change that, run `linkly pages update --url \
+             https://alicia.linklyai.page/q3-growth --access private`.";
+        let mut file = file_params(Some("private"));
+        file.url = Some(url.into());
+        let mut text = params("save");
+        text.url = Some(url.into());
+        text.content = Some("# Q3".into());
+        text.content_type = Some("markdown".into());
+        text.access = Some("private".into());
+        assert_eq!(combination_error(&file).as_deref(), Some(expected));
+        // New text would go live at once, keeping the Page's access: refused too.
+        assert_eq!(combination_error(&text).as_deref(), Some(expected));
+    }
+
+    #[test]
+    fn a_confirmation_with_access_is_refused_the_same_way() {
+        let mut confirm = params("save");
+        confirm.url = Some("https://alicia.linklyai.page/q3-growth".into());
+        confirm.confirm_sensitive = Some("0d4e3a9c-1111-4000-8000-000000000003".into());
+        confirm.access = Some("public".into());
+        assert!(combination_error(&confirm)
+            .is_some_and(|message| message.starts_with("--access is for a new Page")));
+    }
+
+    #[test]
+    fn a_parameter_error_gives_its_reason() {
+        let refused: anyhow::Error = crate::client::ToolError {
+            code: -32602,
+            message: "Invalid arguments for pages.".into(),
+            data: Some(serde_json::json!({
+                "guidance": ["Check the tool schema via tools/list and adjust the arguments accordingly."],
+                "reason": "access must be public, private or password."
+            })),
+        }
+        .into();
+        assert_eq!(
+            invalid_params_reason(&refused),
+            Some("access must be public, private or password.")
+        );
+    }
+
+    #[test]
+    fn other_errors_have_no_parameter_reason() {
+        let other: anyhow::Error = crate::client::ToolError {
+            code: -32000,
+            message: "offline".into(),
+            data: Some(serde_json::json!({ "reason": "not a parameter" })),
+        }
+        .into();
+        let bare: anyhow::Error = crate::client::ToolError {
+            code: -32602,
+            message: "Invalid arguments for pages.".into(),
+            data: None,
+        }
+        .into();
+        assert_eq!(invalid_params_reason(&other), None);
+        assert_eq!(invalid_params_reason(&bare), None);
+    }
+
+    #[test]
+    fn a_checked_file_save_sends_the_absolute_path() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+        let save = PagesParams {
+            file_path: Some(path.clone()),
+            ..params("save")
+        };
+
+        let call = prepare(save, true).expect("prepared");
+
+        assert_eq!(call.file.as_deref(), Some(file.path()));
+        assert_eq!(
+            call.args,
+            serde_json::json!({ "action": "save", "file_path": path })
+        );
+    }
+
+    #[test]
+    fn a_save_with_a_mistake_is_not_prepared() {
+        assert!(prepare(params("save"), true).is_err());
     }
 }
