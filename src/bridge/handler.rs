@@ -868,7 +868,7 @@ impl StdioBridgeHandler {
     #[tool(
         name = "outline",
         annotations(read_only_hint = true),
-        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Use it on long documents (300+ lines) when the wording is unknown or the answer spans a section; each node gives the line range to 'read'; if a node shows none, 'grep' its title. has_outline=true may mean only a title node.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count."
+        description = "[Workflow: search → grep or outline → read] Get metadata and structural outline of one or more documents by their IDs (obtained from search results) in batch. Use it on long documents (300+ lines) when the wording is unknown or the answer spans a section; each node gives the line range to 'read' (only a start line: read on from it; no line numbers: read on from the nearest node above that has them). has_outline=true may mean only a title node.\n\nSize fields (Desktop-local documents): `word_count` counts words (one per CJK character or Latin word; whitespace/punctuation/markup excluded) and reads well below a Chinese user's 字数; `char_count` counts Unicode characters of the extracted body (whitespace/punctuation/markup included, CR excluded) — the figure to match what the user sees. null/omitted char_count = not yet computed (or an older Desktop), not an empty body; `read` on a local document returns it whenever the Desktop supports it. cloud:// items do not carry char_count."
     )]
     async fn outline(
         &self,
@@ -1126,7 +1126,7 @@ pub(crate) const LOCAL_INSTRUCTIONS: &str = "Linkly AI — full-text search, doc
                  - Always search first. Never fabricate document IDs.\n\
                  - Use 'library' parameter to restrict search to a specific knowledge library\n\
                  - Know the exact wording (names, dates, terms) → 'grep', in the document's language; more precise than 'search' or read-and-scan\n\
-                 - Short document (up to 200 lines) → 'read' it whole (no offset/limit). Long document (300+ lines) with a multi-level outline, wording unknown → 'outline', then read the whole section. Any other document over 200 lines → page through it with `offset`\n\
+                 - Short document (up to 200 lines) → 'read' it whole (no offset/limit). Long document (300+ lines) with has_outline=true, wording unknown → 'outline' first, then read the whole section; if the outline is only a title, page with `offset`. Any other document over 200 lines → page through it with `offset`\n\
                  - Compare, summarize, or list points from several documents → read every relevant result before answering\n\
                  - Searches miss → retry with key terms in the library's other languages\n\
                  - User-given details (year, number, name) are clues: verify them in the document\n\
@@ -1156,7 +1156,7 @@ pub(crate) const REMOTE_INSTRUCTIONS: &str = "Linkly AI — full-text search, do
                  - Always search first. Never fabricate document IDs.\n\
                  - Use 'library' parameter to restrict search to a specific knowledge library\n\
                  - Know the exact wording (names, dates, terms) → 'grep', in the document's language; more precise than 'search' or read-and-scan\n\
-                 - Short document (up to 200 lines) → 'read' it whole (no offset/limit). Long document (300+ lines) with a multi-level outline, wording unknown → 'outline', then read the whole section. Any other document over 200 lines → page through it with `offset`\n\
+                 - Short document (up to 200 lines) → 'read' it whole (no offset/limit). Long document (300+ lines) with has_outline=true, wording unknown → 'outline' first, then read the whole section; if the outline is only a title, page with `offset`. Any other document over 200 lines → page through it with `offset`\n\
                  - Compare, summarize, or list points from several documents → read every relevant result before answering\n\
                  - Searches miss → retry with key terms in the library's other languages\n\
                  - User-given details (year, number, name) are clues: verify them in the document\n\
