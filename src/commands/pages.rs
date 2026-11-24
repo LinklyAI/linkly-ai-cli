@@ -35,6 +35,7 @@ pub struct PagesParams {
     pub title: Option<String>,
     pub description: Option<String>,
     pub access: Option<String>,
+    pub reset_password: bool,
     pub url: Option<String>,
     pub confirm_sensitive: Option<String>,
     pub limit: Option<u32>,
@@ -98,6 +99,7 @@ impl PagesParams {
                 title,
                 description,
                 access,
+                reset_password,
                 conn,
             } => (
                 PagesParams {
@@ -105,6 +107,7 @@ impl PagesParams {
                     title,
                     description,
                     access,
+                    reset_password,
                     ..call("update")
                 },
                 conn,
@@ -148,6 +151,7 @@ fn arguments(params: &PagesParams, content: Option<String>) -> serde_json::Value
     set("title", params.title.clone().map(Into::into));
     set("description", params.description.clone().map(Into::into));
     set("access", params.access.clone().map(Into::into));
+    set("reset_password", params.reset_password.then(|| true.into()));
     set("url", params.url.clone().map(Into::into));
     set(
         "confirm_sensitive",
@@ -166,11 +170,12 @@ fn combination_error(params: &PagesParams) -> Option<String> {
         "update"
             if params.title.is_none()
                 && params.description.is_none()
-                && params.access.is_none() =>
+                && params.access.is_none()
+                && !params.reset_password =>
         {
             Some(
-                "update needs at least one of --title, --description, --access. To replace the \
-                 content, use `linkly pages save --url <url> --file-path <file>`."
+                "update needs at least one of --title, --description, --access, --reset-password. \
+                 To replace the content, use `linkly pages save --url <url> --file-path <file>`."
                     .to_string(),
             )
         }
@@ -519,6 +524,7 @@ mod tests {
             title: None,
             description: None,
             access: None,
+            reset_password: false,
             url: None,
             confirm_sensitive: None,
             limit: None,
@@ -589,6 +595,10 @@ mod tests {
         assert_eq!(
             call(&["pages", "update", "--url", page, "--access", "public"]),
             serde_json::json!({"action": "update", "url": page, "access": "public"})
+        );
+        assert_eq!(
+            call(&["pages", "update", "--url", page, "--reset-password"]),
+            serde_json::json!({"action": "update", "url": page, "reset_password": true})
         );
         assert_eq!(
             call(&["pages", "delete", "--url", page]),
@@ -674,7 +684,11 @@ mod tests {
         let mut update = params("update");
         update.url = Some("https://alicia.linklyai.page/q3-k2m4".into());
         update.access = Some("public".into());
+        let mut reset = params("update");
+        reset.url = Some("https://alicia.linklyai.page/q3-k2m4".into());
+        reset.reset_password = true;
         assert_eq!(combination_error(&file), None);
+        assert_eq!(combination_error(&reset), None);
         assert_eq!(combination_error(&text), None);
         assert_eq!(combination_error(&confirm), None);
         assert_eq!(combination_error(&update), None);

@@ -668,9 +668,16 @@ pub struct PagesInput {
         Who can open the Page: private (default for a new Page, only the \
         author) or public (anyone with the link). save accepts it only when \
         it creates a Page and never changes it on an existing one; update \
-        also accepts password (Pro). null = omitted.\
+        also accepts password (Pro) and returns the password. null = omitted.\
     ")]
     pub access: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "\
+        update: true replaces the password of a password Page with a new one, \
+        which the answer gives; the old one stops working. null = omitted.\
+    ")]
+    pub reset_password: Option<bool>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "\
@@ -1048,9 +1055,9 @@ impl StdioBridgeHandler {
             cannot run commands. Without url this always creates a new Page.\
             \n  Saving new content never changes who can open the Page; use update for that.\
             \n- get: details, links and current settings of the Page at url. Never includes the \
-            password.\
-            \n- update: change title, description or access of the Page at url, without uploading \
-            again.\
+            password; update returns it.\
+            \n- update: change title, description, access or password of the Page at url, without \
+            uploading again.\
             \n- list: your Pages with their status (pending: waiting for an upload, a confirmation \
             or publishing at linkly.ai; published; taken_down): pending ones first, then the most \
             recently published; paginate with limit and offset.\
@@ -1063,10 +1070,12 @@ impl StdioBridgeHandler {
             \n\
             \naccess: private (default for new Pages): only the author can open the Page. public: \
             anyone with the link can open it. update also accepts password (Pro): visitors must \
-            enter a password to open the Page. Passwords are created and shown only at linkly.ai, \
-            never through this tool. If the Page has no password yet, update makes it private and \
-            returns manage_url; tell the user to finish there, and do not say the Page is \
-            password-protected until they have.\
+            enter a password to open the Page. update with access=password returns the password, \
+            creating one if the Page has none, so call it again to look the password up; passwords \
+            are generated and cannot be chosen. update with reset_password=true replaces the \
+            password of a password Page: the old one stops working and visitors must enter the new \
+            one, so use it only when the user asks for a new password. Give passwords only to the \
+            user.\
             \nPublic Pages can be opened by anyone and may appear in search engines; once your \
             Linkly AI Pages homepage launches, they are listed there and in RSS. Email allow-lists \
             are not available yet.\
@@ -1079,6 +1088,7 @@ impl StdioBridgeHandler {
             notes\\n...\",\"content_type\":\"markdown\"}\
             \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"public\"}\
             \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"password\"}\
+            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"reset_password\":true}\
             \n{\"action\":\"get\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\"}\
             \n{\"action\":\"delete\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\"}\
         "
@@ -1765,6 +1775,7 @@ mod tests {
                 "file_path",
                 "limit",
                 "offset",
+                "reset_password",
                 "title",
                 "url"
             ]
@@ -1787,9 +1798,10 @@ mod tests {
 
     #[test]
     fn pages_optional_arguments_take_null() {
-        let explicit_null: PagesInput =
-            serde_json::from_str(r#"{"action":"list","limit":null,"url":null}"#)
-                .expect("null optionals parse");
+        let explicit_null: PagesInput = serde_json::from_str(
+            r#"{"action":"list","limit":null,"url":null,"reset_password":null}"#,
+        )
+        .expect("null optionals parse");
         assert_eq!(
             serde_json::to_value(explicit_null).unwrap(),
             serde_json::json!({"action": "list"})
