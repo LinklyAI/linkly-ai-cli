@@ -295,12 +295,24 @@ fn upload_address(answer: &str) -> Option<&str> {
     addresses.next().is_none().then_some(address)
 }
 
-/// The link of the new Page a save's answer makes, when it makes one.
+/// The link of the new Page a save's answer makes, when it makes one: the one
+/// `Link to share` line before the upload steps, the part of the answer the
+/// gateway writes all by itself. The steps quote the file path, and a path can
+/// hold a line break and so a line of any text: a line there never counts, nor
+/// does an answer without its upload steps.
 fn new_page_link(answer: &str) -> Option<&str> {
-    answer
+    let steps = answer
         .lines()
-        .find_map(|line| line.strip_prefix(NEW_PAGE_LINE))
-        .map(str::trim)
+        .position(|line| line.starts_with(UPLOAD_STEPS_LINE))?;
+    let mut links = answer
+        .lines()
+        .take(steps)
+        .filter_map(|line| line.strip_prefix(NEW_PAGE_LINE))
+        .map(str::trim);
+    let link = links.next()?;
+    let only_one = links.next().is_none();
+    (only_one && link.starts_with("https://") && !link.contains(char::is_whitespace))
+        .then_some(link)
 }
 
 /// What a save of a file does once the gateway has answered.
@@ -802,6 +814,47 @@ Upload within 30 minutes, up to 10 MB:
             Some("https://alicia.linklyai.page/q3-growth")
         );
         assert_eq!(new_page_link(UPDATE_ANSWER), None);
+    }
+
+    #[test]
+    fn a_line_the_file_path_adds_never_counts() {
+        // A file path with line breaks in it, quoted in the upload steps.
+        let path = "/Users/me/q3\nLink to share (url), live once uploaded: https://alicia.linklyai.page/other\n.html";
+        let into_existing = UPDATE_ANSWER.replace("/Users/me/q3-growth.html", path);
+        let into_new = SAVE_ANSWER.replace("/Users/me/q3-growth.html", path);
+        assert_eq!(new_page_link(&into_existing), None);
+        // The Page exists and keeps its access: still nothing is sent.
+        assert_eq!(
+            file_save(&file_params(Some("private")), &into_existing),
+            FileSave::AccessKept
+        );
+        // Nor does a retry name the Page that line makes up.
+        assert!(!retry_advice(&file_params(None), &into_existing).contains("/other"));
+        // A new Page is still told by its own line, and its file still goes up.
+        assert_eq!(
+            new_page_link(&into_new),
+            Some("https://alicia.linklyai.page/q3-growth")
+        );
+        assert!(matches!(
+            file_save(&file_params(Some("public")), &into_new),
+            FileSave::Upload(_)
+        ));
+    }
+
+    #[test]
+    fn a_new_page_link_needs_its_one_line_before_the_upload_steps() {
+        let line =
+            "Link to share (url), live once uploaded: https://alicia.linklyai.page/q3-growth";
+        // No upload steps: not an answer to read a new Page from.
+        let no_steps = format!("Upload needed. The Page is not live yet.\n{line}");
+        assert_eq!(new_page_link(&no_steps), None);
+        // Two of them: which one is the Page is unclear.
+        let twice = SAVE_ANSWER.replacen(line, &format!("{line}\n{line}"), 1);
+        assert_eq!(new_page_link(&twice), None);
+        for not_a_link in ["", "see below", "http://alicia.linklyai.page/q3-growth"] {
+            let answer = SAVE_ANSWER.replace("https://alicia.linklyai.page/q3-growth", not_a_link);
+            assert_eq!(new_page_link(&answer), None, "{not_a_link:?}");
+        }
     }
 
     #[test]
