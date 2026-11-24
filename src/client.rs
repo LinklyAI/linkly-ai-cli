@@ -168,6 +168,35 @@ impl StreamableHttpClient for CallerNamedHttp {
 /// Timeout for MCP session initialization (serve / initialize handshake).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The same for the remote gateway, which may itself wait up to 30 seconds for
+/// a Desktop: its answer has to get here first.
+const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn connect_timeout(conn: &ConnectionInfo) -> Duration {
+    if conn.is_remote {
+        REMOTE_CONNECT_TIMEOUT
+    } else {
+        CONNECT_TIMEOUT
+    }
+}
+
+/// What to say when the handshake did not finish in time. The remote gateway
+/// answers the handshake itself, so there it says nothing about the Desktop.
+fn connect_timeout_message(conn: &ConnectionInfo) -> String {
+    let secs = connect_timeout(conn).as_secs();
+    let what = if conn.is_remote {
+        format!(
+            "The MCP handshake with the remote gateway timed out after {secs} seconds. \
+             This does not mean that the Desktop is offline."
+        )
+    } else {
+        format!(
+            "The MCP handshake with the Desktop timed out after {secs} seconds. It may be busy or unresponsive."
+        )
+    };
+    format!("{what}\n\n{}", conn.doctor_hint())
+}
+
 /// Timeout for individual tool calls (search, read, etc.).
 const CALL_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -240,15 +269,10 @@ impl McpClient {
             config,
         );
 
-        let service = tokio::time::timeout(CONNECT_TIMEOUT, CliClientHandler.serve(transport))
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "Connection timed out after {} seconds. Desktop may be offline or unresponsive.\n\n{}",
-                    CONNECT_TIMEOUT.as_secs(),
-                    conn.doctor_hint()
-                )
-            })??;
+        let service =
+            tokio::time::timeout(connect_timeout(conn), CliClientHandler.serve(transport))
+                .await
+                .map_err(|_| anyhow::anyhow!(connect_timeout_message(conn)))??;
 
         Ok(Self { service, caller })
     }
@@ -526,12 +550,44 @@ fn extract_text(content: &[Content]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{client_headers, CallerNamedHttp, ToolError};
-    use crate::connection::CLIENT_HEADER;
+    use super::{
+        client_headers, connect_timeout, connect_timeout_message, CallerNamedHttp, ToolError,
+    };
+    use crate::connection::{ConnectionInfo, ConnectionMode, CLIENT_HEADER};
     use reqwest::header::{HeaderName, HeaderValue};
     use rmcp::model::{ErrorCode, ErrorData};
     use std::collections::HashMap;
     use std::sync::{Arc, OnceLock};
+
+    fn conn_for_timeout(is_remote: bool) -> ConnectionInfo {
+        ConnectionInfo {
+            mcp_url: "http://127.0.0.1:1/mcp".into(),
+            base_url: "http://127.0.0.1:1".into(),
+            auth_header: None,
+            is_remote,
+            mode: if is_remote {
+                ConnectionMode::Remote
+            } else {
+                ConnectionMode::Local
+            },
+            client_name: None,
+        }
+    }
+
+    #[test]
+    fn a_remote_handshake_timeout_is_not_reported_as_an_offline_desktop() {
+        let remote = conn_for_timeout(true);
+        // The gateway may wait 30 seconds itself; its answer must arrive first.
+        assert!(connect_timeout(&remote).as_secs() > 30);
+        let message = connect_timeout_message(&remote);
+        assert!(message.contains("remote gateway timed out after 45 seconds"));
+        assert!(message.contains("does not mean that the Desktop is offline"));
+        assert!(message.contains("linkly doctor --remote"));
+
+        let local = connect_timeout_message(&conn_for_timeout(false));
+        assert!(local.contains("timed out after 30 seconds"));
+        assert!(local.contains("may be busy or unresponsive"));
+    }
 
     #[test]
     fn a_named_caller_gets_the_header() {
