@@ -479,13 +479,9 @@ pub async fn run(
     };
     let Some(file) = &file else {
         // Text saved, a confirmation, or another action: the answer as it came.
-        // In JSON, what list and get show is the result; the answer of a save,
-        // an update or a delete says in its own `status` what happened.
-        if json_mode && !matches!(params.action.as_str(), "list" | "get") {
-            output::print_answer(&text);
-        } else {
-            output::print_result(&text, json_mode);
-        }
+        // In JSON its `outcome` says what happened, and `status` is the CLI's
+        // `success`, as for every command that calls a tool.
+        output::print_result(&text, json_mode);
         return Ok(());
     };
     match file_save(&params, &text) {
