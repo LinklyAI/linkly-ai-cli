@@ -17,7 +17,7 @@ mod version_check;
 use std::io::{IsTerminal, Write};
 
 use clap::Parser;
-use cli::{AuthAction, Cli, Command, ConnectionArgs, PagesAction};
+use cli::{AuthAction, Cli, Command, ConnectionArgs};
 use outcome::Outcome;
 
 #[tokio::main]
@@ -422,18 +422,14 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
             .await
             .map(found)
         }
-        Command::Pages {
-            action: PagesAction::Upload { address, file },
-        } => commands::upload::run(&address, &file, json_mode)
-            .await
-            .map(found),
         Command::Pages { action } => {
-            let Some((params, conn)) = commands::pages::PagesParams::from_action(action) else {
-                unreachable!("pages upload is handled above");
-            };
+            let (params, conn) = commands::pages::PagesParams::from_action(action);
+            // The flags and the file are checked before connecting: a mistake is
+            // reported even when the Desktop is not running.
+            let call = commands::pages::prepare(params, json_mode)?;
             let conn = resolve_conn(&conn, client)?;
             let client = client::McpClient::connect(&conn).await?;
-            commands::pages::run(&client, &conn, params, json_mode)
+            commands::pages::run(&client, &conn, call, json_mode)
                 .await
                 .map(found)
         }
