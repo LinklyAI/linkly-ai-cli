@@ -381,10 +381,11 @@ block reports total, has_more and next_annotations_offset.")]
     /// Linkly AI Pages: publish a file or text as a web page, and manage your Pages
     ///
     /// Pages live at https://<username>.linklyai.page/<slug>. `linkly pages save
-    /// --file-path …` answers with an upload address: send the file with
-    /// `linkly pages upload <address> <file>`. New Pages are private: only you can
-    /// open them. Public Pages can be opened by anyone and may appear in search
-    /// engines; password Pages need Pro, and passwords are made only at linkly.ai
+    /// --file-path <file>` uploads the file and prints the links; `linkly pages
+    /// upload` sends a file to an upload address from the pages tool's answer.
+    /// New Pages are private: only you can open them. Public Pages can be opened by
+    /// anyone and may appear in search engines; password Pages need Pro, and
+    /// passwords are made only at linkly.ai
     Pages {
         #[command(subcommand)]
         action: PagesAction,
@@ -481,7 +482,7 @@ too.")]
 pub enum PagesAction {
     /// Publish a file or text as a Page, or replace the content of the Page given in --url
     Save {
-        /// Absolute path of the file to publish (Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG)
+        /// The file to publish (Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG), uploaded right away; a relative path is taken from the current directory
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         file_path: Option<String>,
 
@@ -490,7 +491,7 @@ pub enum PagesAction {
         content: Option<String>,
 
         /// With --content: markdown or html
-        #[arg(long, value_parser = ["markdown", "html"])]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         content_type: Option<String>,
 
         /// The Page title
@@ -502,7 +503,7 @@ pub enum PagesAction {
         description: Option<String>,
 
         /// Who can open a new Page: private (the default) or public. Saving into an existing Page never changes it; use `linkly pages update`
-        #[arg(long, value_parser = ["public", "private"])]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         access: Option<String>,
 
         /// Link of one of your Pages: replace its content
@@ -557,7 +558,7 @@ pub enum PagesAction {
         description: Option<String>,
 
         /// Who can open it: private, public, or password (Pro; the password itself is made at linkly.ai)
-        #[arg(long, value_parser = ["public", "private", "password"])]
+        #[arg(long, value_hint = clap::ValueHint::Other)]
         access: Option<String>,
 
         #[command(flatten)]
@@ -574,10 +575,12 @@ pub enum PagesAction {
         conn: ConnectionArgs,
     },
 
-    /// Send a file to the upload address a save answered with
+    /// Send a file to an upload address from the pages tool's answer
     ///
-    /// Sends the raw bytes with an HTTP PUT straight to that address, so it takes
-    /// no connection flags. Only addresses that start with
+    /// `linkly pages save --file-path` uploads by itself; this is for an address
+    /// the MCP tool gave, or to retry an upload a save could not finish. Sends the
+    /// raw bytes with an HTTP PUT straight to that address, so it takes no
+    /// connection flags. Only addresses that start with
     /// https://api.linkly.ai/v1/uploads/upl_ are accepted. Retrying the same
     /// command is safe until the address expires (30 minutes)
     Upload {
@@ -731,6 +734,16 @@ mod tests {
         assert!(parse(&["list", "--scope", "folder"]).is_ok());
         assert!(parse(&["list", "--scope", "some-future-scope"]).is_ok());
         assert!(parse(&["search", "q", "--scope", "some-future-scope"]).is_ok());
+    }
+
+    #[test]
+    fn pages_access_and_content_type_values_are_not_frozen_at_the_cli_layer() {
+        // Same reason as `scope`: the gateway leaves both value sets open in the
+        // pages schema so that new values need no new client, and answers an
+        // unknown one with the values it takes.
+        assert!(parse(&["pages", "save", "--file-path", "q3.md", "--access", "later"]).is_ok());
+        assert!(parse(&["pages", "update", "--url", "u", "--access", "later"]).is_ok());
+        assert!(parse(&["pages", "save", "--content", "x", "--content-type", "later"]).is_ok());
     }
 
     #[test]
@@ -992,8 +1005,10 @@ mod tests {
         assert!(parse(&["pages", "list", "--limit", "5"]).is_ok());
         assert!(parse(&["pages", "get", "--url", page]).is_ok());
         assert!(parse(&["pages", "update", "--url", page, "--access", "public"]).is_ok());
-        // A password is set with update only (save takes public or private).
-        assert!(parse(&["pages", "save", "--content", "x", "--access", "password"]).is_err());
+        // A password is set with update only, but which access values save takes
+        // is the gateway's to say, which it does with that reason (see
+        // `pages_access_and_content_type_values_are_not_frozen_at_the_cli_layer`).
+        assert!(parse(&["pages", "save", "--content", "x", "--access", "password"]).is_ok());
         assert!(parse(&["pages", "delete", "--url", page]).is_ok());
         assert!(parse(&["pages", "upload", address, "q3.html"]).is_ok());
         // get, update and delete name the Page; no --action, no top-level upload.
