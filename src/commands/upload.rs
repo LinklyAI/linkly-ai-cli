@@ -108,9 +108,7 @@ pub(crate) async fn cancel(address: &str) {
 /// Print an upload's answer.
 pub(crate) fn print_answer(text: &str, answer: &serde_json::Value, json_mode: bool) {
     if json_mode {
-        // The answer's own `status` (published, needs_confirmation,
-        // awaiting_publish, superseded) is the result: printed as it came.
-        output::print_answer(text);
+        output::print_result(&json_answer(answer).to_string(), true);
     } else {
         // The answer's `message` says what happened and what to tell the user.
         let message = answer
@@ -119,6 +117,20 @@ pub(crate) fn print_answer(text: &str, answer: &serde_json::Value, json_mode: bo
             .unwrap_or(text);
         println!("{message}");
     }
+}
+
+/// An upload's answer as `--json` prints it. As for every command that calls
+/// a tool, `status` says the command succeeded (print_result writes it); the
+/// upload's own status (published, needs_confirmation, awaiting_publish,
+/// superseded) is its `outcome`, as `pages` writes it.
+fn json_answer(answer: &serde_json::Value) -> serde_json::Value {
+    let mut answer = answer.clone();
+    if let Some(object) = answer.as_object_mut() {
+        if let Some(status) = object.remove("status") {
+            object.insert("outcome".to_string(), status);
+        }
+    }
+    answer
 }
 
 /// Whether a successful PUT's body is the endpoint's answer: an object with
@@ -394,6 +406,23 @@ mod tests {
     async fn cancel_that_cannot_reach_the_endpoint_returns_quietly() {
         // Nothing listens there: the upload expires on its own.
         cancel("http://127.0.0.1:9/v1/uploads/upl_test").await;
+    }
+
+    #[test]
+    fn json_gives_the_uploads_own_status_as_its_outcome() {
+        let answer = serde_json::json!({
+            "status": "needs_confirmation",
+            "url": "https://alicia.linklyai.page/q3-growth",
+            "upload_id": "0d4e3a9c-1111-4000-8000-000000000003",
+        });
+        assert_eq!(
+            json_answer(&answer),
+            serde_json::json!({
+                "outcome": "needs_confirmation",
+                "url": "https://alicia.linklyai.page/q3-growth",
+                "upload_id": "0d4e3a9c-1111-4000-8000-000000000003",
+            })
+        );
     }
 
     #[tokio::test]
