@@ -135,7 +135,10 @@ fn read_content(content: &str) -> Result<String> {
 }
 
 /// The tool arguments for `params`; `content` already read.
-fn arguments(params: &PagesParams, content: Option<String>) -> serde_json::Value {
+/// The tool's arguments. With `--json` the answer comes as JSON, as for the
+/// other commands; not for a file save, whose answer the CLI reads itself
+/// before it sends the file.
+fn arguments(params: &PagesParams, content: Option<String>, json: bool) -> serde_json::Value {
     let mut args = serde_json::json!({ "action": params.action });
     let mut set = |key: &str, value: Option<serde_json::Value>| {
         if let Some(value) = value {
@@ -155,6 +158,9 @@ fn arguments(params: &PagesParams, content: Option<String>) -> serde_json::Value
     );
     set("limit", params.limit.map(Into::into));
     set("offset", params.offset.map(Into::into));
+    if json && params.file_path.is_none() {
+        args["output_format"] = "json".into();
+    }
     args
 }
 
@@ -446,7 +452,7 @@ pub fn prepare(mut params: PagesParams, json_mode: bool) -> Result<PagesCall> {
         Ok(content) => content,
         Err(e) => return output::print_error(&e.to_string(), json_mode),
     };
-    let args = arguments(&params, content);
+    let args = arguments(&params, content, json_mode);
     Ok(PagesCall { params, file, args })
 }
 
@@ -460,6 +466,9 @@ pub async fn run(
     let text = match client.call_tool("pages", args, conn).await {
         Ok(text) => text,
         Err(e) if is_unknown_tool(&e) => return output::print_error(NO_PAGES_TOOL, json_mode),
+        Err(e) if refuses_output_format(&e) => {
+            return output::print_error(NO_JSON_ANSWER, json_mode)
+        }
         Err(e) => {
             // Text mode prints the reason alone; `--json` keeps the whole error.
             if let (false, Some(reason)) = (json_mode, invalid_params_reason(&e)) {
@@ -470,6 +479,8 @@ pub async fn run(
     };
     let Some(file) = &file else {
         // Text saved, a confirmation, or another action: the answer as it came.
+        // In JSON its `outcome` says what happened, and `status` is the CLI's
+        // `success`, as for every command that calls a tool.
         output::print_result(&text, json_mode);
         return Ok(());
     };
@@ -497,6 +508,21 @@ pub async fn run(
 /// for it (that would stop every command on older Desktops).
 const NO_PAGES_TOOL: &str = "This connection has no pages tool. Update the Linkly AI desktop app \
      to the latest version; if it is up to date, Linkly AI Pages is not available for this account.";
+
+/// A Desktop older than `output_format` on `pages` refuses it as a field it
+/// does not know; only `--json` sends it.
+const NO_JSON_ANSWER: &str =
+    "This Linkly AI desktop app cannot answer pages as JSON yet. Update it \
+     to the latest version, or run the command with --remote.";
+
+fn refuses_output_format(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<crate::client::ToolError>()
+        .is_some_and(|e| {
+            e.code == -32602
+                && e.message.contains("unknown field")
+                && e.message.contains("output_format")
+        })
+}
 
 fn is_unknown_tool(err: &anyhow::Error) -> bool {
     err.downcast_ref::<crate::client::ToolError>()
@@ -532,20 +558,20 @@ mod tests {
         save.file_path = Some("/Users/me/q3.html".into());
         save.description = Some("Q3 review".into());
         assert_eq!(
-            arguments(&save, None),
+            arguments(&save, None, false),
             serde_json::json!({"action": "save", "file_path": "/Users/me/q3.html", "description": "Q3 review"})
         );
         let mut confirm = params("save");
         confirm.url = Some("https://alicia.linklyai.page/q3-k2m4".into());
         confirm.confirm_sensitive = Some("0d4e3a9c-1111-4000-8000-000000000003".into());
         assert_eq!(
-            arguments(&confirm, None),
+            arguments(&confirm, None, false),
             serde_json::json!({"action": "save", "url": "https://alicia.linklyai.page/q3-k2m4", "confirm_sensitive": "0d4e3a9c-1111-4000-8000-000000000003"})
         );
         let mut list = params("list");
         list.limit = Some(5);
         assert_eq!(
-            arguments(&list, None),
+            arguments(&list, None, false),
             serde_json::json!({"action": "list", "limit": 5})
         );
     }
@@ -561,7 +587,7 @@ mod tests {
         };
         let (params, _) = PagesParams::from_action(action);
         let content = params.content.clone();
-        arguments(&params, content)
+        arguments(&params, content, false)
     }
 
     #[test]
@@ -996,5 +1022,49 @@ Upload within 30 minutes, up to 10 MB:
     #[test]
     fn a_save_with_a_mistake_is_not_prepared() {
         assert!(prepare(params("save"), true).is_err());
+    }
+
+    #[test]
+    fn json_asks_for_a_json_answer_but_never_for_a_file_save() {
+        let list = arguments(&params("list"), None, true);
+        let text = PagesParams {
+            content: Some("# Q3".into()),
+            content_type: Some("markdown".into()),
+            ..params("save")
+        };
+        let file = PagesParams {
+            file_path: Some("/Users/me/q3-growth.html".into()),
+            ..params("save")
+        };
+        assert_eq!(list["output_format"], "json");
+        assert_eq!(
+            arguments(&text, Some("# Q3".into()), true)["output_format"],
+            "json"
+        );
+        // The CLI reads a file save's answer before sending the file: as written.
+        assert!(arguments(&file, None, true).get("output_format").is_none());
+        assert!(arguments(&params("list"), None, false)
+            .get("output_format")
+            .is_none());
+    }
+
+    #[test]
+    fn a_desktop_that_does_not_know_output_format_is_told_apart() {
+        let old_desktop: anyhow::Error = crate::client::ToolError {
+            code: -32602,
+            message: "failed to deserialize parameters: unknown field `output_format`, expected one of `action`, `file_path`".into(),
+            data: None,
+        }
+        .into();
+        let other: anyhow::Error = crate::client::ToolError {
+            code: -32602,
+            message: "Invalid arguments for pages.".into(),
+            data: Some(
+                serde_json::json!({ "reason": "access must be public, private or password." }),
+            ),
+        }
+        .into();
+        assert!(refuses_output_format(&old_desktop));
+        assert!(!refuses_output_format(&other));
     }
 }
