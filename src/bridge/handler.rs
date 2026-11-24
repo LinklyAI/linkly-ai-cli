@@ -699,6 +699,14 @@ pub struct PagesInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "list: how many Pages to skip, for paging. null = omitted.")]
     pub offset: Option<u32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "\
+        Output format. Defaults to \"markdown\" (human-readable); \
+        set to \"json\" for structured JSON (machine-parseable). \
+        Sending `null` or omitting the field both yield the default.\
+    ")]
+    pub output_format: Option<String>,
 }
 
 // ── Cloud-only tools (#77) — SYNC: linkly-ai-api/src/mcp-gateway/tools-registry.ts is the
@@ -1765,6 +1773,7 @@ mod tests {
                 "file_path",
                 "limit",
                 "offset",
+                "output_format",
                 "title",
                 "url"
             ]
