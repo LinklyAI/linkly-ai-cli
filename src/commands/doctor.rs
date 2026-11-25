@@ -155,12 +155,12 @@ async fn diagnose(
     }
 }
 
-/// Failed checks that make a connection unusable. "Version" is informational:
-/// an outdated Desktop is worth knowing but doesn't block anything.
+/// Failed checks that make a connection unusable. An outdated Desktop or an
+/// inconclusive Desktop probe is worth reporting but does not block commands.
 fn hard_failures(checks: &[Check]) -> usize {
     checks
         .iter()
-        .filter(|c| !c.ok && c.name != "Version")
+        .filter(|c| !c.ok && c.name != "Version" && c.name != "Desktop probe")
         .count()
 }
 
@@ -621,27 +621,29 @@ async fn run_health_check(checks: &mut Vec<Check>, conn: &ConnectionInfo, is_rem
 
 async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
     let start = Instant::now();
-    // The outer timeout overrides the per-operation timeouts inside connect (30s) / call_tool (60s),
+    // The outer timeout overrides the per-operation timeouts inside connect (30s, remote 45s) / call_tool (60s),
     // since doctor should give a quick verdict rather than making the user wait.
-    // Remote gets 30s: connect runs its own health check first (up to 15s there), then opens
-    // the session over a second connection, so a slow TLS handshake is paid twice.
+    // Remote gets 65s: connect runs its own health check first (up to 15s there), then opens
+    // the session with the same 45s every remote command has, so doctor never fails a
+    // connection that the commands can use.
     // Uses tools/list (MCP built-in) instead of calling a specific tool, so it works
     // regardless of which tools the Desktop registers.
     let limit = if conn.is_remote {
-        Duration::from_secs(30)
+        Duration::from_secs(65)
     } else {
         Duration::from_secs(10)
     };
     let result = tokio::time::timeout(limit, async {
         let client = McpClient::connect(conn).await?;
-        client.list_tools().await
+        let tools = client.list_tools().await?;
+        anyhow::Ok((client, tools))
     })
     .await;
 
     let latency = start.elapsed().as_millis() as u64;
 
     match result {
-        Ok(Ok(tools)) => {
+        Ok(Ok((client, tools))) => {
             checks.push(Check {
                 name: "MCP",
                 ok: true,
@@ -653,6 +655,11 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
                 latency_ms: Some(latency),
                 advice: None,
             });
+            // The gateway answers tools/list itself, whatever state the Desktop is in.
+            let tunnel_ok = checks.iter().any(|c| c.name == "Tunnel" && c.ok);
+            if conn.is_remote && tunnel_ok {
+                checks.extend(check_remote_desktop(&client, conn).await);
+            }
         }
         Ok(Err(e)) => {
             checks.push(Check {
@@ -660,10 +667,7 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
                 ok: false,
                 detail: format!("MCP session failed: {}", e),
                 latency_ms: Some(latency),
-                advice: Some(
-                    "The tunnel is connected but the Desktop MCP service may be unresponsive.\n    Try restarting Linkly AI Desktop."
-                        .to_string(),
-                ),
+                advice: Some(roundtrip_advice(conn).to_string()),
             });
         }
         Err(_) => {
@@ -672,13 +676,81 @@ async fn run_mcp_roundtrip(checks: &mut Vec<Check>, conn: &ConnectionInfo) {
                 ok: false,
                 detail: format!("Round-trip timed out ({}s)", limit.as_secs()),
                 latency_ms: Some(latency),
-                advice: Some(
-                    "The tunnel is connected but the Desktop is not responding.\n    Try restarting Linkly AI Desktop."
-                        .to_string(),
-                ),
+                advice: Some(roundtrip_advice(conn).to_string()),
             });
         }
     }
+}
+
+fn roundtrip_advice(conn: &ConnectionInfo) -> &'static str {
+    if conn.is_remote {
+        "The MCP handshake or tool list did not complete at the remote gateway.\n    Check your network and try again in a moment."
+    } else {
+        "The MCP handshake or tool list did not complete.\n    Try again; if it keeps failing, restart Linkly AI Desktop."
+    }
+}
+
+/// Whether the Desktop on the other end of the tunnel answers: the gateway's
+/// `list_libraries` asks it. A failed request reports a diagnostic warning,
+/// not a verdict about the Desktop.
+async fn check_remote_desktop(client: &McpClient, conn: &ConnectionInfo) -> Option<Check> {
+    let start = Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        client.call_tool("list_libraries", serde_json::json!({}), conn),
+    )
+    .await;
+    let answer = match &result {
+        Ok(Ok(text)) => Ok(text.as_str()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("timed out (30s)".to_string()),
+    };
+    remote_desktop_check(answer, start.elapsed().as_millis() as u64)
+}
+
+/// Reads only how the local section starts: what follows, and the cloud
+/// section, carry names and descriptions written by users.
+fn remote_desktop_check(answer: Result<&str, String>, latency: u64) -> Option<Check> {
+    let probe_failed = answer.is_err();
+    let (ok, detail, advice) = match answer {
+        Ok(text) => {
+            let local = text
+                .split_once("## Local libraries\n")
+                .map(|(_, rest)| rest);
+            let local = local.unwrap_or_default().trim_start();
+            if local.starts_with("### Libraries") {
+                (
+                    true,
+                    "Answered a request through the tunnel".to_string(),
+                    None,
+                )
+            } else if local.starts_with("Local Desktop could not be reached") {
+                (
+                    false,
+                    "The gateway got no answer through the tunnel".to_string(),
+                    Some("The Desktop may be busy or asleep, or its connection may have dropped.\n    Try again; if it keeps failing, restart Linkly AI Desktop. Pages and cloud libraries do not need it."),
+                )
+            } else {
+                return None;
+            }
+        }
+        Err(e) => (
+            false,
+            format!("Could not check whether the Desktop answers: {e}"),
+            Some("Try again in a moment."),
+        ),
+    };
+    Some(Check {
+        name: if probe_failed {
+            "Desktop probe"
+        } else {
+            "Desktop"
+        },
+        ok,
+        detail,
+        latency_ms: Some(latency),
+        advice: advice.map(str::to_string),
+    })
 }
 
 // ── Output formatters ───────────────────────────────────
@@ -690,6 +762,8 @@ fn print_checks(checks: &[Check]) {
     for check in checks {
         let label = if check.ok {
             "[ok]".green().to_string()
+        } else if check.name == "Desktop probe" {
+            "[WARN]".yellow().to_string()
         } else {
             "[FAIL]".red().to_string()
         };
@@ -789,19 +863,15 @@ fn checks_json(checks: &[Check], mode: &ConnectionMode) -> serde_json::Value {
 }
 
 fn checks_json_for(checks: &[Check], mode: &str) -> serde_json::Value {
-    // Split failed checks into hard failures and warnings. The "Version"
-    // check is informational only — an outdated Desktop is a real concern
-    // but doesn't block diagnostics from running, and `run()` deliberately
-    // keeps it out of the exit-code calculation. The JSON envelope must
-    // use the same partition so a CI script that keys off `.status` and
-    // one that keys off `$?` reach the same conclusion.
+    // Version and an inconclusive Desktop probe are warnings, not proof that
+    // the connection is unusable. Keep JSON status and exit code consistent.
     let hard_failures = checks
         .iter()
-        .filter(|c| !c.ok && c.name != "Version")
+        .filter(|c| !c.ok && c.name != "Version" && c.name != "Desktop probe")
         .count();
     let warnings = checks
         .iter()
-        .filter(|c| !c.ok && c.name == "Version")
+        .filter(|c| !c.ok && (c.name == "Version" || c.name == "Desktop probe"))
         .count();
     let total_issues = hard_failures + warnings;
 
@@ -853,6 +923,153 @@ fn checks_json_for(checks: &[Check], mode: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REACHED: &str = "# Libraries\n\n## Local libraries\n\n### Libraries\n\n- notes\n\n## Cloud libraries\n\n- Local Desktop could not be reached";
+    const NOT_REACHED: &str = "# Libraries\n\n## Local libraries\n\nLocal Desktop could not be reached — your local libraries cannot be\nlisted or searched right now.\n\n## Cloud libraries\n\n### Libraries";
+    const FREE: &str = "## Local libraries\n\nRemote access to local libraries (via the Linkly AI tunnel) requires a Pro\nsubscription";
+
+    #[test]
+    fn the_desktop_check_goes_by_the_local_section_alone() {
+        // Text in the cloud section does not count, either way.
+        assert!(remote_desktop_check(Ok(REACHED), 200).unwrap().ok);
+        assert!(!remote_desktop_check(Ok(NOT_REACHED), 10_500).unwrap().ok);
+        // Nobody asked the Desktop: no verdict.
+        assert!(remote_desktop_check(Ok(FREE), 200).is_none());
+        assert!(remote_desktop_check(Ok("No libraries available"), 200).is_none());
+        assert_eq!(
+            remote_desktop_check(Err("refused".into()), 200)
+                .unwrap()
+                .name,
+            "Desktop probe"
+        );
+    }
+
+    /// A remote gateway on loopback: health, the handshake, tools/list, and
+    /// `list_libraries` answered with `libraries`, or with a JSON-RPC error
+    /// when it is `None`.
+    async fn fake_gateway(libraries: Option<&'static str>) -> ConnectionInfo {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let (head, body) = loop {
+                        let n = stream.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&chunk[..n]);
+                        let text = String::from_utf8_lossy(&request).to_string();
+                        let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                            continue;
+                        };
+                        let length = head
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if body.len() >= length {
+                            break (head.to_string(), body.to_string());
+                        }
+                    };
+                    let body: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                    let reply = if head.starts_with("GET /mcp/health") {
+                        serde_json::json!({ "status": "ok", "tunnel": "connected" })
+                    } else if libraries.is_none() && body["method"] == "tools/call" {
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": body["id"],
+                            "error": { "code": -32603, "message": "Internal error" }
+                        })
+                    } else if head.starts_with("POST ") && body.get("id").is_some() {
+                        let result = match body["method"].as_str().unwrap_or_default() {
+                            "initialize" => serde_json::json!({
+                                "protocolVersion": body["params"]["protocolVersion"],
+                                "capabilities": { "tools": {} },
+                                "serverInfo": { "name": "fake-gateway", "version": "0.0.0" }
+                            }),
+                            "tools/list" => serde_json::json!({ "tools": [] }),
+                            _ => {
+                                serde_json::json!({ "content": [{ "type": "text", "text": libraries }] })
+                            }
+                        };
+                        serde_json::json!({ "jsonrpc": "2.0", "id": body["id"], "result": result })
+                    } else {
+                        serde_json::Value::Null
+                    };
+                    let response = if !reply.is_null() {
+                        let reply = reply.to_string();
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len())
+                    } else if head.starts_with("POST ") {
+                        "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
+                    } else {
+                        "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        ConnectionInfo {
+            mcp_url: format!("{base_url}/mcp"),
+            base_url,
+            auth_header: None,
+            is_remote: true,
+            mode: ConnectionMode::Remote,
+            client_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_connected_tunnel_gets_a_desktop_check_and_a_disconnected_one_does_not() {
+        for (libraries, expected) in [
+            (REACHED, Some(true)),
+            (NOT_REACHED, Some(false)),
+            (FREE, None),
+        ] {
+            let conn = fake_gateway(Some(libraries)).await;
+            let mut checks = vec![check("Tunnel", true)];
+            run_mcp_roundtrip(&mut checks, &conn).await;
+            let find = |name: &str| checks.iter().find(|c| c.name == name).map(|c| c.ok);
+            assert_eq!(
+                find("MCP"),
+                Some(true),
+                "the handshake works whatever the Desktop does"
+            );
+            assert_eq!(find("Desktop"), expected);
+        }
+        let conn = fake_gateway(Some(NOT_REACHED)).await;
+        let mut checks = vec![check("Tunnel", false)];
+        run_mcp_roundtrip(&mut checks, &conn).await;
+        assert!(checks.iter().all(|c| c.name != "Desktop"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_desktop_request_gives_no_verdict_and_keeps_remote_usable() {
+        let conn = fake_gateway(None).await;
+        let mut checks = vec![check("Tunnel", true)];
+        run_mcp_roundtrip(&mut checks, &conn).await;
+        let find = |name: &str| checks.iter().find(|c| c.name == name).map(|c| c.ok);
+        assert_eq!(find("MCP"), Some(true));
+        assert_eq!(
+            find("Desktop"),
+            None,
+            "a failed request says nothing about the Desktop"
+        );
+        assert_eq!(find("Desktop probe"), Some(false));
+        let group = group(Some(checks));
+        assert_eq!(group.status(), "warning");
+        assert!(group.usable(), "`doctor --remote` must not fail on it");
+        let json = checks_json_for(group.checks.as_ref().unwrap(), "remote");
+        assert_eq!(json["hard_failures"], 0);
+        assert_eq!(json["warnings"], 1);
+        assert_eq!(json["status"], "warning");
+    }
 
     fn check(name: &'static str, ok: bool) -> Check {
         Check {
