@@ -550,6 +550,23 @@ fn to_confirm(answer: &serde_json::Value) -> Option<&str> {
     answer["username"].as_str()
 }
 
+/// What an agent is told to do with a preview. Nobody has agreed to anything
+/// yet, so it names the question before the command.
+fn confirm_advice(username: &str) -> String {
+    format!(
+        "Nothing is set up yet. Agents: show all of this to the user and ask whether they want \
+         this address, which cannot be changed. Only after they agree, run: \
+         linkly pages setup --confirm {username}"
+    )
+}
+
+/// A preview in JSON with that advice in `next_step`; `None` for another answer.
+fn with_confirm_advice(mut answer: serde_json::Value) -> Option<String> {
+    let advice = confirm_advice(to_confirm(&answer)?);
+    answer["next_step"] = advice.into();
+    Some(answer.to_string())
+}
+
 /// Asks whether to set up the username it is given.
 type Ask = fn(&str) -> Result<bool>;
 
@@ -570,7 +587,14 @@ async fn finish_setup(
     json_mode: bool,
 ) -> Result<()> {
     let answer: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
-    let Some(message) = answer["message"].as_str().filter(|_| !json_mode) else {
+    if json_mode {
+        output::print_result(
+            &with_confirm_advice(answer).unwrap_or(text.to_string()),
+            true,
+        );
+        return Ok(());
+    }
+    let Some(message) = answer["message"].as_str() else {
         output::print_result(text, json_mode);
         return Ok(());
     };
@@ -579,7 +603,7 @@ async fn finish_setup(
         return Ok(());
     };
     let Some(ask) = ask else {
-        println!("\nTo confirm, run: linkly pages setup --confirm {username}");
+        println!("\n{}", confirm_advice(username));
         return Ok(());
     };
     if !ask(username)? {
@@ -1152,6 +1176,42 @@ Upload within 30 minutes, up to 10 MB:
                 call(&["pages", "setup", "--confirm", given])["confirm_setup"],
                 "alicia"
             );
+        }
+    }
+
+    #[test]
+    fn a_preview_asks_for_the_users_agreement_before_it_names_the_command() {
+        let advice = confirm_advice("alicia");
+        let (ask, run) = (
+            advice.find("ask whether").expect("asks"),
+            advice
+                .find("setup --confirm alicia")
+                .expect("names the command"),
+        );
+        assert!(ask < run, "{advice}");
+        let preview = serde_json::json!({"outcome": "confirmation_needed", "username": "alicia"});
+        let json = with_confirm_advice(preview).expect("a preview");
+        assert!(json.contains("next_step"), "{json}");
+        let done = serde_json::json!({"outcome": "set_up", "username": "alicia"});
+        assert_eq!(with_confirm_advice(done), None);
+    }
+
+    /// Every command that takes something the user can choose tells agents to ask.
+    #[test]
+    fn the_help_of_what_can_be_chosen_tells_agents_to_ask() {
+        use clap::CommandFactory;
+        let mut cli = crate::cli::Cli::command();
+        let pages = cli.find_subcommand_mut("pages").expect("pages");
+        assert!(pages.render_long_help().to_string().contains("Agents:"));
+        for name in ["save", "update", "setup", "delete"] {
+            let command = pages.find_subcommand_mut(name).expect(name);
+            let help = command.render_long_help().to_string();
+            assert!(help.contains("Agents:"), "{name}: {help}");
+            // `-h` too for the options that need it.
+            if name != "delete" {
+                let short = command.render_help().to_string();
+                assert!(short.contains("Agents:"), "{name}: {short}");
+            }
         }
     }
 
