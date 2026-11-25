@@ -684,7 +684,7 @@ pub struct PagesInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "\
         Link of one of your Pages, such as \
-        https://alicia.linklyai.page/q3-review-7k2m. Required for get, update \
+        https://alicia.linklyai.page/q3-review. Required for get, update \
         and delete. With save it names the Page whose content to replace. \
         null = omitted.\
     ")]
@@ -1107,11 +1107,11 @@ impl StdioBridgeHandler {
             growth review\"}\
             \n{\"action\":\"save\",\"content\":\"# Weekly \
             notes\\n...\",\"content_type\":\"markdown\"}\
-            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"public\"}\
-            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"access\":\"password\"}\
-            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\",\"reset_password\":true}\
-            \n{\"action\":\"get\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\"}\
-            \n{\"action\":\"delete\",\"url\":\"https://alicia.linklyai.page/q3-review-7k2m\"}\
+            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review\",\"access\":\"public\"}\
+            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review\",\"access\":\"password\"}\
+            \n{\"action\":\"update\",\"url\":\"https://alicia.linklyai.page/q3-review\",\"reset_password\":true}\
+            \n{\"action\":\"get\",\"url\":\"https://alicia.linklyai.page/q3-review\"}\
+            \n{\"action\":\"delete\",\"url\":\"https://alicia.linklyai.page/q3-review\"}\
         "
     )]
     async fn pages(
