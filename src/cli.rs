@@ -384,7 +384,7 @@ block reports total, has_more and next_annotations_offset.")]
     /// --file-path <file>` publishes the file, upload included, and prints the
     /// links. New Pages are private: only you can open them. Public Pages can be
     /// opened by anyone and may appear in search engines; password Pages need Pro,
-    /// and passwords are made only at linkly.ai
+    /// and `linkly pages update --access password` prints the password
     Pages {
         #[command(subcommand)]
         action: PagesAction,
@@ -532,7 +532,7 @@ pub enum PagesAction {
         conn: ConnectionArgs,
     },
 
-    /// Details, links and settings of one of your Pages (never the password)
+    /// Details, links and settings of one of your Pages (update prints the password)
     Get {
         /// Link of one of your Pages
         #[arg(long, value_hint = clap::ValueHint::Url)]
@@ -542,7 +542,7 @@ pub enum PagesAction {
         conn: ConnectionArgs,
     },
 
-    /// Change a Page's title, description or access, without uploading again
+    /// Change a Page's title, description, access or password, without uploading again
     Update {
         /// Link of one of your Pages
         #[arg(long, value_hint = clap::ValueHint::Url)]
@@ -556,9 +556,13 @@ pub enum PagesAction {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         description: Option<String>,
 
-        /// Who can open it: private, public, or password (Pro; the password itself is made at linkly.ai)
+        /// Who can open it: private, public, or password (Pro; prints the password, made if there is none)
         #[arg(long, value_hint = clap::ValueHint::Other)]
         access: Option<String>,
+
+        /// Replace the password of a password Page and print the new one; the old one stops working
+        #[arg(long)]
+        reset_password: bool,
 
         #[command(flatten)]
         conn: ConnectionArgs,
