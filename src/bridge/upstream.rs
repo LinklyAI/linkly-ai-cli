@@ -1,5 +1,4 @@
-//! The upstream behind the stdio bridge, connected before it starts when that
-//! is possible and on the first tool call otherwise.
+//! The upstream behind the stdio bridge, connected on the first tool call.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -34,12 +33,11 @@ pub struct Upstream {
 }
 
 impl Upstream {
-    /// `session` is `None` when the upstream could not be reached at startup.
-    pub fn new(is_remote: bool, session: Option<Session>, connect: Connect) -> Self {
+    pub fn new(is_remote: bool, connect: Connect) -> Self {
         Self {
             is_remote,
             connect,
-            session: Mutex::new(session.map(Arc::new)),
+            session: Mutex::new(None),
             caller: OnceLock::new(),
         }
     }
@@ -51,6 +49,22 @@ impl Upstream {
         if let Some(session) = self.session.lock().await.as_deref() {
             self.apply_caller(session);
         }
+    }
+
+    /// Test-only: an upstream that is already connected.
+    #[cfg(test)]
+    pub(crate) fn connected(session: Session) -> Self {
+        Self {
+            is_remote: session.conn.is_remote,
+            connect: Box::new(|| panic!("the session is already open")),
+            session: Mutex::new(Some(Arc::new(session))),
+            caller: OnceLock::new(),
+        }
+    }
+
+    /// The connecting application's name, once it introduced itself.
+    pub fn caller(&self) -> Option<&str> {
+        self.caller.get().map(String::as_str)
     }
 
     fn apply_caller(&self, session: &Session) {

@@ -15,9 +15,10 @@ Connections (commands that read or write documents):
               (any plan, Desktop may be offline). Sign in: `linkly auth login`
               (agents: see `linkly auth login --help`)
   `linkly doctor` checks all of them; notes always live on the Desktop machine.
+  `linkly pages` needs none of them: it goes to Linkly AI with the CLI's own sign-in.
 
 Environment:
-  LINKLY_API_KEY         key for --remote, ahead of the saved one
+  LINKLY_API_KEY         key for --remote and `linkly pages`, ahead of the saved one
   LINKLY_CONFIG_DIR      where credentials live (default ~/.linkly); one directory = one account
   LINKLY_NO_SKILLS_HINT  set to 1 to silence the agent-skill update notice
   LINKLY_WEB_URL         override https://linkly.ai for `auth login` (development only)
@@ -384,7 +385,16 @@ block reports total, has_more and next_annotations_offset.")]
     /// --file-path <file>` publishes the file, upload included, and prints the
     /// links. New Pages are private: only you can open them. Public Pages can be
     /// opened by anyone and may appear in search engines; password Pages need Pro,
-    /// and `linkly pages update --access password` prints the password
+    /// and `linkly pages update --access password` prints the password.
+    ///
+    /// Uses the account signed in to the CLI (`linkly auth login`), and works with
+    /// the Desktop closed. With --remote, a file saved again is not matched to the
+    /// Page made from it: pass --url
+    ///
+    /// Agents: what the user can choose is theirs to decide: the address, the
+    /// title, the description, who can open a Page, a new password. Say what you
+    /// would use and get their agreement before you run the command, unless they
+    /// already told you. Never pick an address for them
     Pages {
         #[command(subcommand)]
         action: PagesAction,
@@ -480,6 +490,14 @@ too.")]
 #[derive(Subcommand)]
 pub enum PagesAction {
     /// Publish a file or text as a Page, or replace the content of the Page given in --url
+    ///
+    /// A new Page's link ends in a slug made from the file name, or with --content
+    /// from the title, or else from the text's own heading or first line
+    /// (Q3 growth.html gives q3-growth; a taken one gets -2). No option sets it, and
+    /// it stays the same once the Page is published. Agents: before you save a new
+    /// Page, tell the user the link it would get, its title and who could open it,
+    /// and ask whether that is what they want. For another link, save the file under
+    /// another name, or pass another --title with --content
     Save {
         /// The file to publish (Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG), uploaded right away; a relative path is taken from the current directory
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
@@ -493,19 +511,19 @@ pub enum PagesAction {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         content_type: Option<String>,
 
-        /// The Page title
+        /// The Page title (with --content, a new Page's link is made from it). Agents: the user's choice
         #[arg(long, value_hint = clap::ValueHint::Other)]
         title: Option<String>,
 
-        /// One sentence about the Page
+        /// One sentence about the Page. Agents: show it to the user first
         #[arg(long, value_hint = clap::ValueHint::Other)]
         description: Option<String>,
 
-        /// Who can open a new Page: private (the default) or public. Not with --url: saving into an existing Page never changes it; use `linkly pages update`
+        /// Who can open a new Page: private (the default) or public. Not with --url: saving into an existing Page never changes it; use `linkly pages update`. Agents: public only after the user agreed
         #[arg(long, value_hint = clap::ValueHint::Other)]
         access: Option<String>,
 
-        /// Link of one of your Pages: replace its content
+        /// Link of one of your Pages: replace its content. Agents: only a Page the user named
         #[arg(long, value_hint = clap::ValueHint::Url)]
         url: Option<String>,
 
@@ -543,6 +561,9 @@ pub enum PagesAction {
     },
 
     /// Change a Page's title, description, access or password, without uploading again
+    ///
+    /// The link stays the same. Agents: change only what the user asked for, and
+    /// confirm the new values with them first
     Update {
         /// Link of one of your Pages
         #[arg(long, value_hint = clap::ValueHint::Url)]
@@ -556,11 +577,11 @@ pub enum PagesAction {
         #[arg(long, value_hint = clap::ValueHint::Other)]
         description: Option<String>,
 
-        /// Who can open it: private, public, or password (Pro; prints the password, made if there is none)
+        /// Who can open it: private, public, or password (Pro; prints the password, made if there is none). Agents: only after the user agreed
         #[arg(long, value_hint = clap::ValueHint::Other)]
         access: Option<String>,
 
-        /// Replace the password of a password Page and print the new one; the old one stops working
+        /// Replace the password of a password Page and print the new one; the old one stops working. Agents: only when the user asks for it
         #[arg(long)]
         reset_password: bool,
 
@@ -568,7 +589,27 @@ pub enum PagesAction {
         conn: ConnectionArgs,
     },
 
+    /// Set up Linkly AI Pages for your account, needed once before the first save
+    ///
+    /// Shows the author name, the address (it cannot be changed) and the terms,
+    /// and asks before it sets anything up. The address is the account's username;
+    /// no option picks another. An account without a username chooses one at
+    /// https://linkly.ai/dashboard/pages/setup. Agents: show all of it to the user,
+    /// ask whether they want this address, and pass --confirm only after they
+    /// agreed. Being asked to publish something is not agreement to this
+    Setup {
+        /// The account's username, as setup showed it: set up without asking. Agents: only after the user agreed
+        #[arg(long, value_name = "USERNAME", value_hint = clap::ValueHint::Other)]
+        confirm: Option<String>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
     /// Delete one of your Pages; the link stops working within about a minute
+    ///
+    /// Its address is not used again. Agents: only a Page the user named, after
+    /// they agreed to delete it
     Delete {
         /// Link of one of your Pages
         #[arg(long, value_hint = clap::ValueHint::Url)]

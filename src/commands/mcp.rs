@@ -7,11 +7,13 @@ use crate::bridge::handler::StdioBridgeHandler;
 use crate::bridge::upstream::{Session, Upstream};
 use crate::client::McpClient;
 use crate::connection;
+use crate::pages_gateway::PagesGateway;
 
 /// Run the MCP stdio bridge.
 ///
 /// This creates a stdio MCP server that Claude Desktop (or any MCP client)
-/// can connect to. All tool calls are transparently forwarded upstream.
+/// can connect to. All tool calls are transparently forwarded upstream, except
+/// `pages`, which goes to the cloud gateway in either mode.
 ///
 /// The upstream decides what the client can reach, and the two modes are not
 /// interchangeable:
@@ -30,18 +32,16 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
         bail!("{}", lan_bridge_unsupported(endpoint));
     }
     let client = client.map(str::to_string);
+    let pages = offered_pages(
+        PagesGateway::from_credentials(remote, client.as_deref()),
+        PAGES_PROBE_TIMEOUT,
+    );
     let connect = move || open_session(remote, client.clone());
 
-    // Serve even when the upstream cannot be reached: the client still gets
-    // the tool list, and each tool call tries again and says what is wrong.
-    let (session, pages) = match connect_and_probe(&connect).await {
-        Ok((session, pages)) => (Some(session), pages),
-        Err(err) => {
-            eprintln!("linkly mcp: not connected yet, will retry on the next tool call.\n{err:#}");
-            (None, false)
-        }
-    };
-    let upstream = Upstream::new(remote, session, Box::new(move || Box::pin(connect())));
+    // The upstream is connected on the first call of one of its tools: a Desktop
+    // that is down or stuck must not keep the client from the tool list.
+    let upstream = Upstream::new(remote, Box::new(move || Box::pin(connect())));
+    let pages = pages.await;
 
     // Create the bridge handler and serve over stdio
     let handler = StdioBridgeHandler::with_pages(upstream, pages);
@@ -77,46 +77,25 @@ async fn open_session(remote: bool, client: Option<String>) -> Result<Session> {
     Ok(Session { client, conn })
 }
 
-/// Connect, and learn whether to advertise `pages`: only when the upstream
-/// does — it follows the account's Linkly AI Pages switch there, and an older
-/// Desktop has none.
-async fn connect_and_probe<F, Fut>(connect: &F) -> Result<(Session, bool)>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = Result<Session>>,
-{
-    let Session { client, conn } = connect().await?;
-    let (client, pages) = probe_pages(client, PAGES_PROBE_TIMEOUT, || {
-        McpClient::connect_passthrough(&conn)
-    })
-    .await?;
-    Ok((Session { client, conn }, pages))
-}
+/// How long the bridge waits, before it starts, to learn whether the account
+/// has `pages`: the client that started the bridge is waiting too.
+const PAGES_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long the bridge waits, before it starts, to learn whether the upstream
-/// offers `pages`: the client that started the bridge is waiting too.
-const PAGES_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The client to serve through, and whether the upstream's tool list has
-/// `pages`. A list that fails or does not come within `deadline` counts as no,
-/// and leaves its session possibly stuck: the transport sends one request at
-/// a time and waits for each answer, so every later call would queue behind
-/// it. The bridge then serves through a new session from `reconnect`.
-pub(crate) async fn probe_pages<F, Fut>(
-    client: McpClient,
-    deadline: Duration,
-    reconnect: F,
-) -> Result<(McpClient, bool)>
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<McpClient>>,
-{
-    let listed = tokio::time::timeout(deadline, client.list_tools()).await;
-    match listed {
-        Ok(Ok(names)) => Ok((client, names.iter().any(|name| name == "pages"))),
-        Ok(Err(_)) | Err(_) => {
-            drop(client);
-            Ok((reconnect().await?, false))
+/// The gateway to offer `pages` through: only when it lists the tool for the
+/// account. Without a key, or when it cannot be asked, the bridge serves its
+/// other tools and says on stderr what is missing. Read once: another account
+/// signed in later takes a restart of the bridge.
+async fn offered_pages(gateway: Result<PagesGateway>, timeout: Duration) -> Option<PagesGateway> {
+    let listed = match &gateway {
+        Ok(gateway) => gateway.lists_pages(timeout).await,
+        Err(_) => Ok(true),
+    };
+    match (gateway, listed) {
+        (Ok(gateway), Ok(true)) => Some(gateway),
+        (Ok(_), Ok(false)) => None,
+        (Err(err), _) | (Ok(_), Err(err)) => {
+            eprintln!("linkly mcp: pages is not offered. {err:#} Then restart the bridge.");
+            None
         }
     }
 }
@@ -151,5 +130,40 @@ mod tests {
         assert!(msg.contains("not supported"), "{msg}");
         assert!(msg.contains("http://10.255.255.1:60606/mcp"), "{msg}");
         assert!(msg.contains("linkly mcp --remote"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn pages_is_offered_only_when_the_gateway_lists_it() {
+        use crate::pages_gateway::tests::fake_gateway;
+        let list = |names: serde_json::Value| {
+            (
+                "200 OK",
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": names}}),
+            )
+        };
+        let (url, _) = fake_gateway(vec![
+            list(serde_json::json!([{"name": "pages"}])),
+            list(serde_json::json!([{"name": "search"}])),
+            ("401 Unauthorized", serde_json::json!({})),
+        ])
+        .await;
+        let timeout = Duration::from_secs(5);
+        let mut offered = Vec::new();
+        for _ in 0..3 {
+            let gateway = PagesGateway::at(url.clone(), false, None);
+            offered.push(offered_pages(Ok(gateway), timeout).await.is_some());
+        }
+        assert_eq!(offered, [true, false, false]);
+        assert!(offered_pages(Err(anyhow::anyhow!("no key")), timeout)
+            .await
+            .is_none());
+
+        // A gateway that never answers does not keep the bridge from starting.
+        let silent = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let url = format!("http://{}/mcp", silent.local_addr().expect("address"));
+        let gateway = PagesGateway::at(url, false, None);
+        assert!(offered_pages(Ok(gateway), Duration::from_millis(200))
+            .await
+            .is_none());
     }
 }

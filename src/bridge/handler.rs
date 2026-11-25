@@ -21,6 +21,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpError;
 use crate::bridge::upstream::Upstream;
 use crate::client::{ToolError, ToolFailure};
 use crate::connection::sanitize_client_name;
+use crate::pages_gateway::PagesGateway;
 
 #[derive(Clone)]
 pub struct StdioBridgeHandler {
@@ -30,20 +31,20 @@ pub struct StdioBridgeHandler {
     /// attention on the same sentence until it stops reading it — and this is
     /// a long-lived process, so "every call" can mean hundreds of times.
     notice_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// The upstream lists `pages`: it is advertised here, and the
-    /// instructions mention it.
-    pages: bool,
+    /// Where `pages` goes, when the account has it: it is advertised here then,
+    /// and the instructions mention it. Never the upstream.
+    pages: Option<std::sync::Arc<PagesGateway>>,
     tool_router: ToolRouter<Self>,
 }
 
 impl StdioBridgeHandler {
-    /// The bridge to `upstream`; `pages` when it lists that tool.
-    pub fn with_pages(upstream: Upstream, pages: bool) -> Self {
-        let tool_router = Self::build_router(upstream.is_remote, pages);
+    /// The bridge to `upstream`, with `pages` on its own gateway when there is one.
+    pub fn with_pages(upstream: Upstream, pages: Option<PagesGateway>) -> Self {
+        let tool_router = Self::build_router(upstream.is_remote, pages.is_some());
         Self {
             upstream: std::sync::Arc::new(upstream),
             notice_sent: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            pages,
+            pages: pages.map(std::sync::Arc::new),
             tool_router,
         }
     }
@@ -599,8 +600,8 @@ pub struct NoteSaveInput {
 }
 
 // ── pages — SYNC: linkly-ai-desktop-v3/src-tauri/src/mcp/schemas.rs PagesInput and
-// linkly-ai-api tools-registry.ts, word for word. The gateway implements it; through a
-// local bridge the Desktop forwards it there. Advertised only when the upstream lists it
+// linkly-ai-api tools-registry.ts, word for word. The gateway implements it, and the bridge
+// calls it there in either mode. Advertised only when the gateway lists it for the account
 // (see `commands::mcp::run`).
 
 // `pages` 的操作（Linkly AI Pages）。和 `list.scope` 不同，这里把取值集
@@ -616,6 +617,7 @@ pub enum PagesAction {
     Get,
     Update,
     Delete,
+    Setup,
 }
 
 /// pages 工具的输入参数（Linkly AI Pages）。规则都在网关：哪个参数用于哪个
@@ -624,7 +626,7 @@ pub enum PagesAction {
 #[serde(deny_unknown_fields)]
 pub struct PagesInput {
     #[schemars(description = "\
-        What to do: save, list, get, update or delete. Required, no default.\
+        What to do: save, list, get, update, delete or setup. Required, no default.\
     ")]
     pub action: PagesAction,
 
@@ -698,6 +700,13 @@ pub struct PagesInput {
     pub confirm_sensitive: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "\
+        setup: the account username the user agreed to set up, as setup \
+        showed it. null = omitted: setup only shows the details.\
+    ")]
+    pub confirm_setup: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
         description = "list: how many Pages to return, default 20, max 100. null = omitted."
     )]
@@ -706,6 +715,14 @@ pub struct PagesInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "list: how many Pages to skip, for paging. null = omitted.")]
     pub offset: Option<u32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "\
+        Output format. Defaults to \"markdown\" (human-readable); \
+        set to \"json\" for structured JSON (machine-parseable). \
+        Sending `null` or omitting the field both yield the default.\
+    ")]
+    pub output_format: Option<String>,
 }
 
 // ── Cloud-only tools (#77) — SYNC: linkly-ai-api/src/mcp-gateway/tools-registry.ts is the
@@ -1016,7 +1033,7 @@ impl StdioBridgeHandler {
     }
 }
 
-// ── pages: only when the upstream lists it ──────────────
+// ── pages: only when the gateway lists it ──────────────
 #[tool_router(router = pages_router, vis = "pub(crate)")]
 impl StdioBridgeHandler {
     #[tool(
@@ -1048,9 +1065,10 @@ impl StdioBridgeHandler {
             \n- save: create a Page, or replace the content of the Page given in url.\
             \n  - file_path: absolute path of the file. This tool does not read the file. It \
             returns an upload address; upload the raw bytes there with an HTTP PUT and the Page \
-            goes live. Through the Linkly AI desktop app, sharing the same absolute path again \
-            (outside temporary folders) updates the Page made from it; otherwise pass url to \
-            update.\
+            goes live. Through the Linkly AI desktop app on this computer, or the Linkly AI CLI \
+            without --remote, sharing the same absolute path again (outside temporary folders) \
+            updates the Page made from it; otherwise, over LAN and remote connections too, pass url \
+            to update.\
             \n  - content + content_type (markdown | html): send the text itself, for agents that \
             cannot run commands. Without url this always creates a new Page.\
             \n  Saving new content never changes who can open the Page; use update for that.\
@@ -1062,6 +1080,9 @@ impl StdioBridgeHandler {
             or publishing at linkly.ai; published; taken_down): pending ones first, then the most \
             recently published; paginate with limit and offset.\
             \n- delete: delete the Page at url. The link stops working within about a minute.\
+            \n- setup: Show the account's publishing details. Ask the user to review them. Only \
+            after they agree, call setup again with confirm_setup set to the username shown. Needed \
+            once per account, before the first save.\
             \n\
             \nLinks in results: url is the link to share with others; it opens for them only when \
             the Page is public or password-protected. open_url is for the user to open the Page \
@@ -1099,10 +1120,25 @@ impl StdioBridgeHandler {
     ) -> Result<CallToolResult, McpError> {
         let args = serde_json::to_value(&input)
             .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
+        let Some(gateway) = &self.pages else {
+            return Err(McpError::method_not_found::<
+                rmcp::model::CallToolRequestMethod,
+            >());
+        };
         // The gateway's business errors arrive as tool results with isError and
-        // pass through `forward` intact (`tool_failure_result`).
-        let outcome = self.upstream.call_tool("pages", args).await;
-        self.forward(outcome, flat_bridge_error)
+        // pass through `forward` intact (`tool_failure_result`). So does a call
+        // that did not get there: the model reads what to do about it.
+        let outcome = gateway
+            .call(args, self.upstream.caller())
+            .await
+            .map_err(|err| {
+                if err.is::<ToolError>() || err.is::<ToolFailure>() {
+                    return err;
+                }
+                let text = format!("{err:#}");
+                ToolFailure { text }.into()
+            });
+        self.forward(outcome, bridge_error)
     }
 }
 
@@ -1167,6 +1203,10 @@ pub(crate) const REMOTE_INSTRUCTIONS: &str = "Linkly AI — full-text search, do
 /// (the Desktop's `writes_sentence`, word for word).
 const LOCAL_WRITES: &str = "'note_save' is the only tool here that writes.";
 const LOCAL_WRITES_WITH_PAGES: &str = "'note_save' and 'pages' are the only tools here that write: 'note_save' keeps a note on this computer; 'pages' publishes a file or text as a web page others can open, only when the user asks to share or publish it.";
+/// The same for the remote bridge.
+const REMOTE_WRITES: &str = "'note_save' and 'library_link' are the only tools here that write.";
+const REMOTE_WRITES_WITH_PAGES: &str =
+    "'note_save', 'library_link' and 'pages' are the only tools here that write.";
 /// The gateway's paragraph for accounts with Linkly AI Pages (tools-registry.ts
 /// PAGES_INSTRUCTIONS), placed the same way: before the decision guide.
 const REMOTE_PAGES_PARAGRAPH: &str = "Linkly AI Pages: 'pages' publishes a file or text as a web page that others can open. Use it only when the user asks to share or publish something or wants a link to it; if they named an Artifact, Canvas or another tool, use that, and producing a file is not consent to publish it. Tell the user both url and open_url from the result.\n\n";
@@ -1175,11 +1215,13 @@ pub(crate) fn instructions(is_remote: bool, pages: bool) -> String {
     match (is_remote, pages) {
         (true, false) => REMOTE_INSTRUCTIONS.to_string(),
         (false, false) => LOCAL_INSTRUCTIONS.to_string(),
-        (true, true) => REMOTE_INSTRUCTIONS.replacen(
-            "Decision guide:\n",
-            &format!("{REMOTE_PAGES_PARAGRAPH}Decision guide:\n"),
-            1,
-        ),
+        (true, true) => REMOTE_INSTRUCTIONS
+            .replacen(REMOTE_WRITES, REMOTE_WRITES_WITH_PAGES, 1)
+            .replacen(
+                "Decision guide:\n",
+                &format!("{REMOTE_PAGES_PARAGRAPH}Decision guide:\n"),
+                1,
+            ),
         (false, true) => LOCAL_INSTRUCTIONS.replacen(LOCAL_WRITES, LOCAL_WRITES_WITH_PAGES, 1),
     }
 }
@@ -1193,7 +1235,7 @@ impl ServerHandler for StdioBridgeHandler {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 ..Default::default()
             },
-            instructions: Some(instructions(self.upstream.is_remote, self.pages)),
+            instructions: Some(instructions(self.upstream.is_remote, self.pages.is_some())),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
@@ -1742,9 +1784,9 @@ mod tests {
         );
     }
 
-    // `pages` is advertised only when the upstream lists it, with the same
+    // `pages` is advertised only when the gateway lists it, with the same
     // names, annotations and arguments as the Desktop and the gateway.
-    fn assert_pages_follows_the_upstream(is_remote: bool) {
+    fn assert_pages_follows_the_gateway(is_remote: bool) {
         let without = StdioBridgeHandler::build_router(is_remote, false);
         assert!(!without.has_route("pages"));
         let with = StdioBridgeHandler::build_router(is_remote, true);
@@ -1769,12 +1811,14 @@ mod tests {
                 "access",
                 "action",
                 "confirm_sensitive",
+                "confirm_setup",
                 "content",
                 "content_type",
                 "description",
                 "file_path",
                 "limit",
                 "offset",
+                "output_format",
                 "reset_password",
                 "title",
                 "url"
@@ -1782,24 +1826,24 @@ mod tests {
         );
         assert_eq!(
             props["action"]["enum"],
-            serde_json::json!(["save", "list", "get", "update", "delete"])
+            serde_json::json!(["save", "list", "get", "update", "delete", "setup"])
         );
     }
 
     #[test]
-    fn pages_follows_the_upstream_on_the_local_bridge() {
-        assert_pages_follows_the_upstream(false);
+    fn pages_follows_the_gateway_on_the_local_bridge() {
+        assert_pages_follows_the_gateway(false);
     }
 
     #[test]
-    fn pages_follows_the_upstream_on_the_remote_bridge() {
-        assert_pages_follows_the_upstream(true);
+    fn pages_follows_the_gateway_on_the_remote_bridge() {
+        assert_pages_follows_the_gateway(true);
     }
 
     #[test]
     fn pages_optional_arguments_take_null() {
         let explicit_null: PagesInput = serde_json::from_str(
-            r#"{"action":"list","limit":null,"url":null,"reset_password":null}"#,
+            r#"{"action":"list","limit":null,"url":null,"reset_password":null,"confirm_setup":null}"#,
         )
         .expect("null optionals parse");
         assert_eq!(
@@ -1843,6 +1887,7 @@ mod tests {
             .contains("'note_save' and 'pages' are the only tools here that write"));
         let remote = instructions(true, true);
         assert!(remote.contains("Linkly AI Pages: 'pages' publishes"));
+        assert!(remote.contains(REMOTE_WRITES_WITH_PAGES) && !remote.contains(REMOTE_WRITES));
         assert!(remote.find("Linkly AI Pages:").unwrap() < remote.find("Decision guide:").unwrap());
     }
 
@@ -2249,11 +2294,7 @@ mod tests {
 
     /// An upstream that is already connected and never has to reconnect.
     fn connected(client: McpClient, conn: ConnectionInfo) -> Upstream {
-        Upstream::new(
-            conn.is_remote,
-            Some(Session { client, conn }),
-            Box::new(|| panic!("the session is already open")),
-        )
+        Upstream::connected(Session { client, conn })
     }
 
     async fn bridge_over_fake_gateway() -> (StdioBridgeHandler, Seen) {
@@ -2277,7 +2318,7 @@ mod tests {
         .expect("initialize finishes well within the budget")
         .expect("the bridge client initializes against the fake gateway");
         (
-            StdioBridgeHandler::with_pages(connected(client, remote_connection()), false),
+            StdioBridgeHandler::with_pages(connected(client, remote_connection()), None),
             seen,
         )
     }
@@ -2534,19 +2575,6 @@ mod tests {
     /// carried. Returns the `/mcp` URL. The header can only be observed on
     /// the wire, so unlike [`FakeGateway`] this one speaks real HTTP.
     async fn fake_http_upstream() -> (String, ClientHeaderLog) {
-        fake_http_upstream_with(ToolList::Answered).await
-    }
-
-    /// How the fake upstream answers `tools/list`.
-    #[derive(Clone, Copy, PartialEq)]
-    enum ToolList {
-        /// With `search` and `pages`.
-        Answered,
-        /// Never, on the first session only: the request stays open.
-        NeverOnFirstSession,
-    }
-
-    async fn fake_http_upstream_with(tool_list: ToolList) -> (String, ClientHeaderLog) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -2629,26 +2657,6 @@ mod tests {
                                     reply.len()
                                 )
                             }
-                            "tools/list" => {
-                                let first_list = recorded.lock().unwrap().iter().filter(|(m, _)| m == "tools/list").count() == 1;
-                                if tool_list == ToolList::NeverOnFirstSession && first_list {
-                                    // Holds the request open, as a stuck upstream would.
-                                    std::future::pending::<()>().await;
-                                }
-                                let reply = serde_json::json!({
-                                    "jsonrpc": "2.0",
-                                    "id": body["id"],
-                                    "result": { "tools": [
-                                        { "name": "search", "inputSchema": { "type": "object" } },
-                                        { "name": "pages", "inputSchema": { "type": "object" } }
-                                    ] }
-                                })
-                                .to_string();
-                                format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nMcp-Session-Id: fake-session\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-                                    reply.len()
-                                )
-                            }
                             other => panic!("the fake upstream does not serve {other}"),
                         };
                     }
@@ -2710,7 +2718,7 @@ mod tests {
         let (mcp_url, log) = fake_http_upstream().await;
         let conn = local_connection(&mcp_url, client_flag);
         let bridge =
-            StdioBridgeHandler::with_pages(connected(connect_to_fake(&conn).await, conn), false);
+            StdioBridgeHandler::with_pages(connected(connect_to_fake(&conn).await, conn), None);
 
         let (agent_io, bridge_io) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
@@ -2799,67 +2807,69 @@ mod tests {
         assert_eq!(client_header_on(&seen, "tools/call"), None);
     }
 
-    /// The upstream's tool list says whether the bridge offers `pages`, and
-    /// the bridge serves through the session that answered.
+    /// `pages` goes to the gateway in the name of the agent, and the Desktop
+    /// behind the other tools is never asked: here it is not running.
     #[tokio::test]
-    async fn the_bridge_offers_pages_when_the_upstream_lists_it() {
-        let (mcp_url, log) = fake_http_upstream().await;
-        let conn = local_connection(&mcp_url, None);
-        let first = connect_to_fake(&conn).await;
+    async fn pages_works_while_the_desktop_is_down() {
+        use crate::pages_gateway::tests::{fake_gateway, text_answer};
+        use rmcp::ServiceExt;
 
-        let (client, pages) =
-            crate::commands::mcp::probe_pages(first, std::time::Duration::from_secs(5), || async {
-                panic!("a session that answered is kept")
-            })
-            .await
-            .expect("a client to serve with");
-        client
-            .call_tool("search", serde_json::json!({ "query": "notes" }), &conn)
-            .await
-            .expect("the search goes through");
-
-        assert!(pages);
-        let initialized = log
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(method, _)| method == "initialize")
-            .count();
-        assert_eq!(initialized, 1);
-    }
-
-    /// A tool list that never answers leaves its session stuck behind it — the
-    /// transport waits for one answer at a time — so the bridge serves through
-    /// a new session, without `pages`, and tool calls still reach the upstream.
-    #[tokio::test]
-    async fn after_a_tool_list_that_never_answers_tool_calls_still_reach_the_upstream() {
-        let (mcp_url, log) = fake_http_upstream_with(ToolList::NeverOnFirstSession).await;
-        let conn = local_connection(&mcp_url, None);
-        let first = connect_to_fake(&conn).await;
-
-        let (client, pages) = crate::commands::mcp::probe_pages(
-            first,
-            std::time::Duration::from_millis(200),
-            || async { Ok(connect_to_fake(&conn).await) },
-        )
-        .await
-        .expect("a client to serve with");
-        let searched = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            client.call_tool("search", serde_json::json!({ "query": "notes" }), &conn),
-        )
+        let (url, requests) = fake_gateway(vec![
+            text_answer("PUT https://api.linkly.ai/v1/uploads/upl_x\npassword: k7m2"),
+            ("401 Unauthorized", serde_json::json!({})),
+        ])
         .await;
-
-        assert!(!pages);
-        assert!(
-            matches!(searched, Ok(Ok(_))),
-            "the search reaches the upstream: {searched:?}"
+        let upstream = Upstream::new(
+            false,
+            Box::new(|| Box::pin(async { anyhow::bail!("Desktop is not running") })),
         );
-        assert!(log
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(method, _)| method == "tools/call"));
+        let bridge =
+            StdioBridgeHandler::with_pages(upstream, Some(PagesGateway::at(url, false, None)));
+        let (agent_io, bridge_io) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            if let Ok(server) = bridge.serve(bridge_io).await {
+                let _ = server.waiting().await;
+            }
+        });
+        let agent = rmcp::model::ClientInfo {
+            client_info: Implementation {
+                name: "some-agent".to_string(),
+                version: "1.0.0".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .serve(agent_io)
+        .await
+        .expect("the agent initializes");
+        let tools = agent.list_tools(None).await.expect("the tools are listed");
+        assert!(tools.tools.iter().any(|tool| tool.name == "pages"));
+
+        let call = || rmcp::model::CallToolRequestParams {
+            meta: None,
+            name: "pages".into(),
+            arguments: serde_json::json!({ "action": "setup" })
+                .as_object()
+                .cloned(),
+            task: None,
+        };
+        let answered = agent.call_tool(call()).await.expect("an answer");
+        assert_ne!(answered.is_error, Some(true));
+        let text = serde_json::to_string(&answered.content).unwrap();
+        assert!(text.contains("upl_x") && text.contains("k7m2"), "{text}");
+        let rejected = agent.call_tool(call()).await.expect("a tool result");
+        assert_eq!(rejected.is_error, Some(true));
+        let text = serde_json::to_string(&rejected.content).unwrap();
+        assert!(text.contains("linkly auth login"), "{text}");
+        let _ = agent.cancel().await;
+
+        let seen = requests.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].0.contains("x-linkly-client: some-agent"));
+        assert_eq!(
+            seen[0].1["params"],
+            serde_json::json!({"name": "pages", "arguments": {"action": "setup"}})
+        );
     }
 
     /// An upstream that cannot be reached must not keep the bridge from
@@ -2875,7 +2885,6 @@ mod tests {
         let seen_up = up.clone();
         let upstream = Upstream::new(
             false,
-            None,
             Box::new(move || {
                 let up = seen_up.clone();
                 let conn = local_connection(&mcp_url, None);
@@ -2888,7 +2897,7 @@ mod tests {
                 })
             }),
         );
-        let bridge = StdioBridgeHandler::with_pages(upstream, false);
+        let bridge = StdioBridgeHandler::with_pages(upstream, None);
 
         let (agent_io, bridge_io) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
