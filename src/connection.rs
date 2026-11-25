@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 /// Remote tunnel endpoint
-const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
+pub(crate) const REMOTE_MCP_URL: &str = "https://mcp.linkly.ai/mcp";
 pub(crate) const REMOTE_BASE_URL: &str = "https://mcp.linkly.ai";
 
 /// How long a health check may take before the connection counts as unreachable.

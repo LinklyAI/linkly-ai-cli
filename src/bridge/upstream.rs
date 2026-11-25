@@ -53,6 +53,11 @@ impl Upstream {
         }
     }
 
+    /// The connecting application's name, once it introduced itself.
+    pub fn caller(&self) -> Option<&str> {
+        self.caller.get().map(String::as_str)
+    }
+
     fn apply_caller(&self, session: &Session) {
         if session.conn.client_name.is_none() {
             if let Some(name) = self.caller.get() {

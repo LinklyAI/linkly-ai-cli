@@ -4,11 +4,13 @@ mod client;
 mod commands;
 mod connection;
 mod constants;
+mod device_id;
 mod doc_ids;
 mod http;
 mod manifest;
 mod outcome;
 mod output;
+mod pages_gateway;
 mod skills;
 #[cfg(test)]
 mod test_helpers;
@@ -424,12 +426,11 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
         }
         Command::Pages { action } => {
             let (params, conn) = commands::pages::PagesParams::from_action(action);
-            // The flags and the file are checked before connecting: a mistake is
-            // reported even when the Desktop is not running.
-            let call = commands::pages::prepare(params, json_mode)?;
-            let conn = resolve_conn(&conn, client)?;
-            let client = client::McpClient::connect(&conn).await?;
-            commands::pages::run(&client, &conn, call, json_mode)
+            // The flags and the file are checked before the key: a mistake is
+            // reported even when nobody is signed in.
+            let call = commands::pages::prepare(params, &conn, json_mode)?;
+            let gateway = pages_gateway::PagesGateway::from_credentials(conn.remote, client)?;
+            commands::pages::run(&gateway, call, json_mode)
                 .await
                 .map(found)
         }

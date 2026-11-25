@@ -1,5 +1,6 @@
-//! `linkly pages save|list|get|update|delete` — the `pages` tool: publish a
+//! `linkly pages save|list|get|update|delete|setup` — the `pages` tool: publish a
 //! file or text as a Linkly AI Page, and get, update, list or delete your Pages.
+//! Calls go to the gateway with the CLI's own key (pages_gateway.rs).
 //!
 //! The rules live in the gateway; these commands pass the arguments on and
 //! print the answer as it comes. Two things are done here: flag combinations
@@ -8,16 +9,16 @@
 //! the upload address its answer gives and prints the upload's answer
 //! (upload.rs), unless `--access` meets a Page that already exists.
 
-use std::io::Read;
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use crate::cli::{ConnectionArgs, PagesAction};
-use crate::client::McpClient;
+use crate::client::ToolFailure;
 use crate::commands::upload;
-use crate::connection::ConnectionInfo;
 use crate::output;
+use crate::pages_gateway::{PagesGateway, NOT_AVAILABLE};
 
 /// Read the text from stdin when `--content -`.
 const STDIN_SENTINEL: &str = "-";
@@ -38,6 +39,7 @@ pub struct PagesParams {
     pub reset_password: bool,
     pub url: Option<String>,
     pub confirm_sensitive: Option<String>,
+    pub confirm_setup: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -112,6 +114,14 @@ impl PagesParams {
                 },
                 conn,
             ),
+            PagesAction::Setup { confirm, conn } => (
+                PagesParams {
+                    // It is shown as @username.
+                    confirm_setup: confirm.map(|name| name.trim_start_matches('@').to_string()),
+                    ..call("setup")
+                },
+                conn,
+            ),
             PagesAction::Delete { url, conn } => (
                 PagesParams {
                     url: Some(url),
@@ -137,10 +147,9 @@ fn read_content(content: &str) -> Result<String> {
     Ok(body)
 }
 
-/// The tool arguments for `params`; `content` already read.
-/// The tool's arguments. With `--json` the answer comes as JSON, as for the
+/// The tool arguments for `params`; `content` already read. With `--json` the answer comes as JSON, as for the
 /// other commands; not for a file save, whose answer the CLI reads itself
-/// before it sends the file.
+/// before it sends the file. Setup is always read here, so always as JSON.
 fn arguments(params: &PagesParams, content: Option<String>, json: bool) -> serde_json::Value {
     let mut args = serde_json::json!({ "action": params.action });
     let mut set = |key: &str, value: Option<serde_json::Value>| {
@@ -160,9 +169,13 @@ fn arguments(params: &PagesParams, content: Option<String>, json: bool) -> serde
         "confirm_sensitive",
         params.confirm_sensitive.clone().map(Into::into),
     );
+    set(
+        "confirm_setup",
+        params.confirm_setup.clone().map(Into::into),
+    );
     set("limit", params.limit.map(Into::into));
     set("offset", params.offset.map(Into::into));
-    if json && params.file_path.is_none() {
+    if params.action == "setup" || (json && params.file_path.is_none()) {
         args["output_format"] = "json".into();
     }
     args
@@ -438,10 +451,17 @@ pub struct PagesCall {
 }
 
 /// Check the flags and the file and read `--content -`, before anything
-/// connects: a mistake is reported even when the Desktop is not running. The
+/// is sent: a mistake is reported even when nobody is signed in. The
 /// flags are checked before stdin is read, so a mistake never drains a pipe
 /// the producer cannot replay (as note-save).
-pub fn prepare(mut params: PagesParams, json_mode: bool) -> Result<PagesCall> {
+pub fn prepare(
+    mut params: PagesParams,
+    conn: &ConnectionArgs,
+    json_mode: bool,
+) -> Result<PagesCall> {
+    if conn.lan || conn.endpoint.is_some() {
+        return output::print_error(NO_DESKTOP_OPTIONS, json_mode);
+    }
     if let Some(message) = combination_error(&params) {
         return output::print_error(&message, json_mode);
     }
@@ -461,27 +481,15 @@ pub fn prepare(mut params: PagesParams, json_mode: bool) -> Result<PagesCall> {
     Ok(PagesCall { params, file, args })
 }
 
-pub async fn run(
-    client: &McpClient,
-    conn: &ConnectionInfo,
-    call: PagesCall,
-    json_mode: bool,
-) -> Result<()> {
+pub async fn run(gateway: &PagesGateway, call: PagesCall, json_mode: bool) -> Result<()> {
     let PagesCall { params, file, args } = call;
-    let text = match client.call_tool("pages", args, conn).await {
+    let text = match gateway.call(args, None).await {
         Ok(text) => text,
-        Err(e) if is_unknown_tool(&e) => return output::print_error(NO_PAGES_TOOL, json_mode),
-        Err(e) if refuses_output_format(&e) => {
-            return output::print_error(NO_JSON_ANSWER, json_mode)
-        }
-        Err(e) => {
-            // Text mode prints the reason alone; `--json` keeps the whole error.
-            if let (false, Some(reason)) = (json_mode, invalid_params_reason(&e)) {
-                return output::print_error(reason, json_mode);
-            }
-            return output::print_tool_error(&e, json_mode);
-        }
+        Err(e) => return print_call_error(&e, json_mode),
     };
+    if params.action == "setup" {
+        return finish_setup(gateway, &text, json_mode).await;
+    }
     let Some(file) = &file else {
         // Text saved, a confirmation, or another action: the answer as it came.
         // In JSON its `outcome` says what happened, and `status` is the CLI's
@@ -508,32 +516,85 @@ pub async fn run(
     }
 }
 
-/// The connection has no `pages`: a Desktop older than the tool, or the
-/// account does not have Linkly AI Pages. The version gate is not raised
-/// for it (that would stop every command on older Desktops).
-const NO_PAGES_TOOL: &str = "This connection has no pages tool. Update the Linkly AI desktop app \
-     to the latest version; if it is up to date, Linkly AI Pages is not available for this account.";
+/// `--lan` and `--endpoint` name a Desktop, which may be signed in to another account.
+const NO_DESKTOP_OPTIONS: &str =
+    "Pages uses your CLI account. Remove the Desktop connection options and try again.";
 
-/// A Desktop older than `output_format` on `pages` refuses it as a field it
-/// does not know; only `--json` sends it.
-const NO_JSON_ANSWER: &str =
-    "This Linkly AI desktop app cannot answer pages as JSON yet. Update it \
-     to the latest version, or run the command with --remote.";
+/// How the gateway starts its answer to a save before setup.
+const NOT_SET_UP: &str = "Linkly AI Pages is not set up for this account yet.";
 
-fn refuses_output_format(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<crate::client::ToolError>()
-        .is_some_and(|e| {
-            e.code == -32602
-                && e.message.contains("unknown field")
-                && e.message.contains("output_format")
-        })
+fn print_call_error(err: &anyhow::Error, json_mode: bool) -> Result<()> {
+    if is_unknown_tool(err) {
+        return output::print_error(NOT_AVAILABLE, json_mode);
+    }
+    if let Some(failure) = err.downcast_ref::<ToolFailure>() {
+        if failure.text.starts_with(NOT_SET_UP) {
+            let message = format!("{}\n\nHere, run `linkly pages setup`.", failure.text);
+            return output::print_error(&message, json_mode);
+        }
+    }
+    // Text mode prints the reason alone; `--json` keeps the whole error.
+    if let (false, Some(reason)) = (json_mode, invalid_params_reason(err)) {
+        return output::print_error(reason, json_mode);
+    }
+    output::print_tool_error(err, json_mode)
+}
+
+/// What a `setup` answer asks of a terminal: the username to confirm.
+fn to_confirm(answer: &serde_json::Value) -> Option<&str> {
+    if answer["outcome"] != "confirmation_needed" {
+        return None;
+    }
+    answer["username"].as_str()
+}
+
+/// A `setup` answer as JSON: printed as it is with `--json`, which never asks;
+/// otherwise its message, and a question when somebody is there to answer it.
+async fn finish_setup(gateway: &PagesGateway, text: &str, json_mode: bool) -> Result<()> {
+    let answer: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+    let Some(message) = answer["message"].as_str().filter(|_| !json_mode) else {
+        output::print_result(text, json_mode);
+        return Ok(());
+    };
+    println!("{message}");
+    let Some(username) = to_confirm(&answer) else {
+        return Ok(());
+    };
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        println!("\nTo confirm, run: linkly pages setup --confirm {username}");
+        return Ok(());
+    }
+    print!("\nSet up Linkly AI Pages for @{username}? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut reply = String::new();
+    std::io::stdin().read_line(&mut reply)?;
+    if !agrees(&reply) {
+        println!("Setup canceled.");
+        return Ok(());
+    }
+    let args = serde_json::json!({ "action": "setup", "confirm_setup": username, "output_format": "json" });
+    let done = match gateway.call(args, None).await {
+        Ok(text) => text,
+        Err(e) => return print_call_error(&e, json_mode),
+    };
+    let done: serde_json::Value = serde_json::from_str(&done)?;
+    println!(
+        "{}",
+        done["message"]
+            .as_str()
+            .unwrap_or("Linkly AI Pages is set up.")
+    );
+    Ok(())
+}
+
+fn agrees(reply: &str) -> bool {
+    matches!(reply.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 fn is_unknown_tool(err: &anyhow::Error) -> bool {
     err.downcast_ref::<crate::client::ToolError>()
         .is_some_and(|e| {
-            let message = e.message.to_ascii_lowercase();
-            message.contains("tool not found") || message.contains("unknown tool")
+            e.code == -32601 || e.message.to_ascii_lowercase().contains("unknown tool")
         })
 }
 
@@ -553,6 +614,7 @@ mod tests {
             reset_password: false,
             url: None,
             confirm_sensitive: None,
+            confirm_setup: None,
             limit: None,
             offset: None,
         }
@@ -1024,7 +1086,7 @@ Upload within 30 minutes, up to 10 MB:
             ..params("save")
         };
 
-        let call = prepare(save, true).expect("prepared");
+        let call = prepare(save, &no_conn(), true).expect("prepared");
 
         assert_eq!(call.file.as_deref(), Some(file.path()));
         assert_eq!(
@@ -1035,7 +1097,7 @@ Upload within 30 minutes, up to 10 MB:
 
     #[test]
     fn a_save_with_a_mistake_is_not_prepared() {
-        assert!(prepare(params("save"), true).is_err());
+        assert!(prepare(params("save"), &no_conn(), true).is_err());
     }
 
     #[test]
@@ -1063,22 +1125,85 @@ Upload within 30 minutes, up to 10 MB:
     }
 
     #[test]
-    fn a_desktop_that_does_not_know_output_format_is_told_apart() {
-        let old_desktop: anyhow::Error = crate::client::ToolError {
-            code: -32602,
-            message: "failed to deserialize parameters: unknown field `output_format`, expected one of `action`, `file_path`".into(),
-            data: None,
+    fn setup_always_asks_for_json_and_confirms_the_username() {
+        let mut setup = params("setup");
+        assert_eq!(
+            arguments(&setup, None, false),
+            serde_json::json!({"action": "setup", "output_format": "json"})
+        );
+        setup.confirm_setup = Some("alicia".into());
+        assert_eq!(arguments(&setup, None, true)["confirm_setup"], "alicia");
+        for given in ["alicia", "@alicia"] {
+            assert_eq!(
+                call(&["pages", "setup", "--confirm", given])["confirm_setup"],
+                "alicia"
+            );
         }
-        .into();
-        let other: anyhow::Error = crate::client::ToolError {
-            code: -32602,
-            message: "Invalid arguments for pages.".into(),
-            data: Some(
-                serde_json::json!({ "reason": "access must be public, private or password." }),
-            ),
+    }
+
+    #[test]
+    fn only_a_yes_agrees() {
+        for yes in ["y\n", "YES\n", " yes "] {
+            assert!(agrees(yes), "{yes:?}");
         }
-        .into();
-        assert!(refuses_output_format(&old_desktop));
-        assert!(!refuses_output_format(&other));
+        for no in ["", "\n", "n\n", "alicia\n", "ye"] {
+            assert!(!agrees(no), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn only_an_answer_that_asks_is_confirmed() {
+        let asks = serde_json::json!({"outcome": "confirmation_needed", "username": "alicia"});
+        assert_eq!(to_confirm(&asks), Some("alicia"));
+        let done = serde_json::json!({"outcome": "already_set_up", "username": "alicia"});
+        assert_eq!(to_confirm(&done), None);
+    }
+
+    /// Tests have no terminal: the details are shown and nothing is confirmed.
+    #[tokio::test]
+    async fn setup_without_a_terminal_sends_one_call_and_confirms_nothing() {
+        use crate::pages_gateway::tests::{fake_gateway, text_answer};
+        let answer = r#"{"outcome":"confirmation_needed","username":"alicia","message":"Set up?"}"#;
+        for json in [false, true] {
+            let (url, requests) = fake_gateway(vec![text_answer(answer)]).await;
+            let gateway = PagesGateway::at(url, false, None);
+            let prepared = prepare(params("setup"), &no_conn(), json).expect("ready");
+            run(&gateway, prepared, json).await.expect("shown");
+            let seen = requests.lock().unwrap();
+            assert_eq!(seen.len(), 1);
+            assert!(seen[0].1["params"]["arguments"]
+                .get("confirm_setup")
+                .is_none());
+        }
+    }
+
+    fn no_conn() -> ConnectionArgs {
+        ConnectionArgs {
+            remote: false,
+            lan: false,
+            endpoint: None,
+            token: None,
+        }
+    }
+
+    #[test]
+    fn desktop_connection_options_are_refused_before_anything_is_sent() {
+        let lan = ConnectionArgs {
+            lan: true,
+            ..no_conn()
+        };
+        let endpoint = ConnectionArgs {
+            endpoint: Some("http://10.0.0.2:60606".into()),
+            token: Some("t".into()),
+            ..no_conn()
+        };
+        for conn in [lan, endpoint] {
+            assert!(prepare(params("list"), &conn, false).is_err());
+        }
+        let remote = ConnectionArgs {
+            remote: true,
+            ..no_conn()
+        };
+        assert!(prepare(params("list"), &remote, false).is_ok());
     }
 }

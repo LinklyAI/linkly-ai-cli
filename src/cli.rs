@@ -15,9 +15,10 @@ Connections (commands that read or write documents):
               (any plan, Desktop may be offline). Sign in: `linkly auth login`
               (agents: see `linkly auth login --help`)
   `linkly doctor` checks all of them; notes always live on the Desktop machine.
+  `linkly pages` needs none of them: it goes to Linkly AI with the CLI's own sign-in.
 
 Environment:
-  LINKLY_API_KEY         key for --remote, ahead of the saved one
+  LINKLY_API_KEY         key for --remote and `linkly pages`, ahead of the saved one
   LINKLY_CONFIG_DIR      where credentials live (default ~/.linkly); one directory = one account
   LINKLY_NO_SKILLS_HINT  set to 1 to silence the agent-skill update notice
   LINKLY_WEB_URL         override https://linkly.ai for `auth login` (development only)
@@ -384,7 +385,11 @@ block reports total, has_more and next_annotations_offset.")]
     /// --file-path <file>` publishes the file, upload included, and prints the
     /// links. New Pages are private: only you can open them. Public Pages can be
     /// opened by anyone and may appear in search engines; password Pages need Pro,
-    /// and `linkly pages update --access password` prints the password
+    /// and `linkly pages update --access password` prints the password.
+    ///
+    /// Uses the account signed in to the CLI (`linkly auth login`), and works with
+    /// the Desktop closed. With --remote, a file saved again is not matched to the
+    /// Page made from it: pass --url
     Pages {
         #[command(subcommand)]
         action: PagesAction,
@@ -563,6 +568,20 @@ pub enum PagesAction {
         /// Replace the password of a password Page and print the new one; the old one stops working
         #[arg(long)]
         reset_password: bool,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
+    /// Set up Linkly AI Pages for your account, needed once before the first save
+    ///
+    /// Shows the author name, the address (it cannot be changed) and the terms,
+    /// and asks before it sets anything up. Agents: show that to the user, and
+    /// pass --confirm only after they agreed
+    Setup {
+        /// The account's username, as setup showed it: set up without asking
+        #[arg(long, value_name = "USERNAME", value_hint = clap::ValueHint::Other)]
+        confirm: Option<String>,
 
         #[command(flatten)]
         conn: ConnectionArgs,
