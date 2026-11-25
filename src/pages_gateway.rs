@@ -99,7 +99,8 @@ impl PagesGateway {
     }
 
     fn post(&self, method: &str, params: Value) -> Result<reqwest::RequestBuilder> {
-        let builder = crate::http::client_builder();
+        // A redirect would send the text, the path and the device id to another address.
+        let builder = crate::http::client_builder().redirect(reqwest::redirect::Policy::none());
         // A fake gateway on this machine is never behind the environment's proxy.
         #[cfg(test)]
         let builder = builder.no_proxy();
@@ -330,6 +331,31 @@ pub(crate) mod tests {
         assert_eq!(errors[2].to_string(), KEY_REJECTED);
         assert!(errors[3].to_string().contains("'mcp' required"));
         assert!(errors[4].to_string().contains("503"));
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_a_failure_and_nothing_is_sent_on() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (elsewhere, requests) = fake_gateway(vec![text_answer("ok")]).await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind");
+        let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut chunk = [0u8; 8192];
+            let _ = stream.read(&mut chunk).await.expect("read");
+            let response = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.expect("write");
+        });
+        let err = PagesGateway::at(url, false, None)
+            .call(json!({"action": "save", "content": "secret"}), None)
+            .await
+            .expect_err("a redirect fails");
+        assert!(err.to_string().contains("307"), "{err}");
+        assert!(requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

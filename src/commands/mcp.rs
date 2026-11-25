@@ -38,15 +38,10 @@ pub async fn run(endpoint: Option<&str>, remote: bool, client: Option<&str>) -> 
     );
     let connect = move || open_session(remote, client.clone());
 
-    // Serve even when the upstream cannot be reached: the client still gets
-    // the tool list, and each tool call tries again and says what is wrong.
-    let (session, pages) = tokio::join!(connect(), pages);
-    let session = session
-        .inspect_err(|err| {
-            eprintln!("linkly mcp: not connected yet, will retry on the next tool call.\n{err:#}");
-        })
-        .ok();
-    let upstream = Upstream::new(remote, session, Box::new(move || Box::pin(connect())));
+    // The upstream is connected on the first call of one of its tools: a Desktop
+    // that is down or stuck must not keep the client from the tool list.
+    let upstream = Upstream::new(remote, Box::new(move || Box::pin(connect())));
+    let pages = pages.await;
 
     // Create the bridge handler and serve over stdio
     let handler = StdioBridgeHandler::with_pages(upstream, pages);

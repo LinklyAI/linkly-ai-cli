@@ -488,7 +488,9 @@ pub async fn run(gateway: &PagesGateway, call: PagesCall, json_mode: bool) -> Re
         Err(e) => return print_call_error(&e, json_mode),
     };
     if params.action == "setup" {
-        return finish_setup(gateway, &text, json_mode).await;
+        let terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        let ask = terminal.then_some(ask_at_terminal as Ask);
+        return finish_setup(gateway, &text, ask, json_mode).await;
     }
     let Some(file) = &file else {
         // Text saved, a confirmation, or another action: the answer as it came.
@@ -548,9 +550,25 @@ fn to_confirm(answer: &serde_json::Value) -> Option<&str> {
     answer["username"].as_str()
 }
 
+/// Asks whether to set up the username it is given.
+type Ask = fn(&str) -> Result<bool>;
+
+fn ask_at_terminal(username: &str) -> Result<bool> {
+    print!("\nSet up Linkly AI Pages for @{username}? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut reply = String::new();
+    std::io::stdin().read_line(&mut reply)?;
+    Ok(agrees(&reply))
+}
+
 /// A `setup` answer as JSON: printed as it is with `--json`, which never asks;
 /// otherwise its message, and a question when somebody is there to answer it.
-async fn finish_setup(gateway: &PagesGateway, text: &str, json_mode: bool) -> Result<()> {
+async fn finish_setup(
+    gateway: &PagesGateway,
+    text: &str,
+    ask: Option<Ask>,
+    json_mode: bool,
+) -> Result<()> {
     let answer: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
     let Some(message) = answer["message"].as_str().filter(|_| !json_mode) else {
         output::print_result(text, json_mode);
@@ -560,15 +578,11 @@ async fn finish_setup(gateway: &PagesGateway, text: &str, json_mode: bool) -> Re
     let Some(username) = to_confirm(&answer) else {
         return Ok(());
     };
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+    let Some(ask) = ask else {
         println!("\nTo confirm, run: linkly pages setup --confirm {username}");
         return Ok(());
-    }
-    print!("\nSet up Linkly AI Pages for @{username}? [y/N] ");
-    std::io::stdout().flush()?;
-    let mut reply = String::new();
-    std::io::stdin().read_line(&mut reply)?;
-    if !agrees(&reply) {
+    };
+    if !ask(username)? {
         println!("Setup canceled.");
         return Ok(());
     }
@@ -1159,21 +1173,38 @@ Upload within 30 minutes, up to 10 MB:
         assert_eq!(to_confirm(&done), None);
     }
 
-    /// Tests have no terminal: the details are shown and nothing is confirmed.
+    /// The calls `setup` makes after its preview: none but for an agreed
+    /// question, and none at all with `--json`.
     #[tokio::test]
-    async fn setup_without_a_terminal_sends_one_call_and_confirms_nothing() {
+    async fn setup_confirms_only_when_somebody_agreed() {
         use crate::pages_gateway::tests::{fake_gateway, text_answer};
-        let answer = r#"{"outcome":"confirmation_needed","username":"alicia","message":"Set up?"}"#;
-        for json in [false, true] {
-            let (url, requests) = fake_gateway(vec![text_answer(answer)]).await;
+        let preview =
+            r#"{"outcome":"confirmation_needed","username":"alicia","message":"Set up?"}"#;
+        let yes: Option<Ask> = Some(|_| Ok(true));
+        let no: Option<Ask> = Some(|_| Ok(false));
+        for (ask, json, calls) in [
+            (None, false, 0),
+            (None, true, 0),
+            (no, false, 0),
+            (yes, true, 0),
+            (yes, false, 1),
+        ] {
+            let (url, requests) = fake_gateway(vec![text_answer(
+                r#"{"outcome":"set_up","message":"Done."}"#,
+            )])
+            .await;
             let gateway = PagesGateway::at(url, false, None);
-            let prepared = prepare(params("setup"), &no_conn(), json).expect("ready");
-            run(&gateway, prepared, json).await.expect("shown");
+            finish_setup(&gateway, preview, ask, json)
+                .await
+                .expect("finished");
             let seen = requests.lock().unwrap();
-            assert_eq!(seen.len(), 1);
-            assert!(seen[0].1["params"]["arguments"]
-                .get("confirm_setup")
-                .is_none());
+            assert_eq!(seen.len(), calls);
+            if calls == 1 {
+                assert_eq!(
+                    seen[0].1["params"]["arguments"],
+                    serde_json::json!({"action": "setup", "confirm_setup": "alicia", "output_format": "json"})
+                );
+            }
         }
     }
 

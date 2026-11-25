@@ -1065,9 +1065,10 @@ impl StdioBridgeHandler {
             \n- save: create a Page, or replace the content of the Page given in url.\
             \n  - file_path: absolute path of the file. This tool does not read the file. It \
             returns an upload address; upload the raw bytes there with an HTTP PUT and the Page \
-            goes live. Through the Linkly AI desktop app or CLI on this computer, sharing the same \
-            absolute path again (outside temporary folders) updates the Page made from it; \
-            otherwise pass url to update.\
+            goes live. Through the Linkly AI desktop app on this computer, or the Linkly AI CLI \
+            without --remote, sharing the same absolute path again (outside temporary folders) \
+            updates the Page made from it; otherwise, over LAN and remote connections too, pass url \
+            to update.\
             \n  - content + content_type (markdown | html): send the text itself, for agents that \
             cannot run commands. Without url this always creates a new Page.\
             \n  Saving new content never changes who can open the Page; use update for that.\
@@ -1202,6 +1203,10 @@ pub(crate) const REMOTE_INSTRUCTIONS: &str = "Linkly AI — full-text search, do
 /// (the Desktop's `writes_sentence`, word for word).
 const LOCAL_WRITES: &str = "'note_save' is the only tool here that writes.";
 const LOCAL_WRITES_WITH_PAGES: &str = "'note_save' and 'pages' are the only tools here that write: 'note_save' keeps a note on this computer; 'pages' publishes a file or text as a web page others can open, only when the user asks to share or publish it.";
+/// The same for the remote bridge.
+const REMOTE_WRITES: &str = "'note_save' and 'library_link' are the only tools here that write.";
+const REMOTE_WRITES_WITH_PAGES: &str =
+    "'note_save', 'library_link' and 'pages' are the only tools here that write.";
 /// The gateway's paragraph for accounts with Linkly AI Pages (tools-registry.ts
 /// PAGES_INSTRUCTIONS), placed the same way: before the decision guide.
 const REMOTE_PAGES_PARAGRAPH: &str = "Linkly AI Pages: 'pages' publishes a file or text as a web page that others can open. Use it only when the user asks to share or publish something or wants a link to it; if they named an Artifact, Canvas or another tool, use that, and producing a file is not consent to publish it. Tell the user both url and open_url from the result.\n\n";
@@ -1210,11 +1215,13 @@ pub(crate) fn instructions(is_remote: bool, pages: bool) -> String {
     match (is_remote, pages) {
         (true, false) => REMOTE_INSTRUCTIONS.to_string(),
         (false, false) => LOCAL_INSTRUCTIONS.to_string(),
-        (true, true) => REMOTE_INSTRUCTIONS.replacen(
-            "Decision guide:\n",
-            &format!("{REMOTE_PAGES_PARAGRAPH}Decision guide:\n"),
-            1,
-        ),
+        (true, true) => REMOTE_INSTRUCTIONS
+            .replacen(REMOTE_WRITES, REMOTE_WRITES_WITH_PAGES, 1)
+            .replacen(
+                "Decision guide:\n",
+                &format!("{REMOTE_PAGES_PARAGRAPH}Decision guide:\n"),
+                1,
+            ),
         (false, true) => LOCAL_INSTRUCTIONS.replacen(LOCAL_WRITES, LOCAL_WRITES_WITH_PAGES, 1),
     }
 }
@@ -1880,6 +1887,7 @@ mod tests {
             .contains("'note_save' and 'pages' are the only tools here that write"));
         let remote = instructions(true, true);
         assert!(remote.contains("Linkly AI Pages: 'pages' publishes"));
+        assert!(remote.contains(REMOTE_WRITES_WITH_PAGES) && !remote.contains(REMOTE_WRITES));
         assert!(remote.find("Linkly AI Pages:").unwrap() < remote.find("Decision guide:").unwrap());
     }
 
@@ -2286,11 +2294,7 @@ mod tests {
 
     /// An upstream that is already connected and never has to reconnect.
     fn connected(client: McpClient, conn: ConnectionInfo) -> Upstream {
-        Upstream::new(
-            conn.is_remote,
-            Some(Session { client, conn }),
-            Box::new(|| panic!("the session is already open")),
-        )
+        Upstream::connected(Session { client, conn })
     }
 
     async fn bridge_over_fake_gateway() -> (StdioBridgeHandler, Seen) {
@@ -2817,7 +2821,6 @@ mod tests {
         .await;
         let upstream = Upstream::new(
             false,
-            None,
             Box::new(|| Box::pin(async { anyhow::bail!("Desktop is not running") })),
         );
         let bridge =
@@ -2882,7 +2885,6 @@ mod tests {
         let seen_up = up.clone();
         let upstream = Upstream::new(
             false,
-            None,
             Box::new(move || {
                 let up = seen_up.clone();
                 let conn = local_connection(&mcp_url, None);
