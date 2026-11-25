@@ -155,12 +155,12 @@ async fn diagnose(
     }
 }
 
-/// Failed checks that make a connection unusable. "Version" is informational:
-/// an outdated Desktop is worth knowing but doesn't block anything.
+/// Failed checks that make a connection unusable. An outdated Desktop or an
+/// inconclusive Desktop probe is worth reporting but does not block commands.
 fn hard_failures(checks: &[Check]) -> usize {
     checks
         .iter()
-        .filter(|c| !c.ok && c.name != "Version")
+        .filter(|c| !c.ok && c.name != "Version" && c.name != "Desktop probe")
         .count()
 }
 
@@ -691,7 +691,8 @@ fn roundtrip_advice(conn: &ConnectionInfo) -> &'static str {
 }
 
 /// Whether the Desktop on the other end of the tunnel answers: the gateway's
-/// `list_libraries` asks it. `None` when the answer does not say.
+/// `list_libraries` asks it. A failed request reports a diagnostic warning,
+/// not a verdict about the Desktop.
 async fn check_remote_desktop(client: &McpClient, conn: &ConnectionInfo) -> Option<Check> {
     let start = Instant::now();
     let result = tokio::time::timeout(
@@ -710,6 +711,7 @@ async fn check_remote_desktop(client: &McpClient, conn: &ConnectionInfo) -> Opti
 /// Reads only how the local section starts: what follows, and the cloud
 /// section, carry names and descriptions written by users.
 fn remote_desktop_check(answer: Result<&str, String>, latency: u64) -> Option<Check> {
+    let probe_failed = answer.is_err();
     let (ok, detail, advice) = match answer {
         Ok(text) => {
             let local = text
@@ -734,12 +736,16 @@ fn remote_desktop_check(answer: Result<&str, String>, latency: u64) -> Option<Ch
         }
         Err(e) => (
             false,
-            format!("Could not be checked: {e}"),
+            format!("Could not check whether the Desktop answers: {e}"),
             Some("Try again in a moment."),
         ),
     };
     Some(Check {
-        name: "Desktop",
+        name: if probe_failed {
+            "Desktop probe"
+        } else {
+            "Desktop"
+        },
         ok,
         detail,
         latency_ms: Some(latency),
@@ -756,6 +762,8 @@ fn print_checks(checks: &[Check]) {
     for check in checks {
         let label = if check.ok {
             "[ok]".green().to_string()
+        } else if check.name == "Desktop probe" {
+            "[WARN]".yellow().to_string()
         } else {
             "[FAIL]".red().to_string()
         };
@@ -855,19 +863,15 @@ fn checks_json(checks: &[Check], mode: &ConnectionMode) -> serde_json::Value {
 }
 
 fn checks_json_for(checks: &[Check], mode: &str) -> serde_json::Value {
-    // Split failed checks into hard failures and warnings. The "Version"
-    // check is informational only — an outdated Desktop is a real concern
-    // but doesn't block diagnostics from running, and `run()` deliberately
-    // keeps it out of the exit-code calculation. The JSON envelope must
-    // use the same partition so a CI script that keys off `.status` and
-    // one that keys off `$?` reach the same conclusion.
+    // Version and an inconclusive Desktop probe are warnings, not proof that
+    // the connection is unusable. Keep JSON status and exit code consistent.
     let hard_failures = checks
         .iter()
-        .filter(|c| !c.ok && c.name != "Version")
+        .filter(|c| !c.ok && c.name != "Version" && c.name != "Desktop probe")
         .count();
     let warnings = checks
         .iter()
-        .filter(|c| !c.ok && c.name == "Version")
+        .filter(|c| !c.ok && (c.name == "Version" || c.name == "Desktop probe"))
         .count();
     let total_issues = hard_failures + warnings;
 
@@ -932,12 +936,18 @@ mod tests {
         // Nobody asked the Desktop: no verdict.
         assert!(remote_desktop_check(Ok(FREE), 200).is_none());
         assert!(remote_desktop_check(Ok("No libraries available"), 200).is_none());
-        assert!(!remote_desktop_check(Err("refused".into()), 200).unwrap().ok);
+        assert_eq!(
+            remote_desktop_check(Err("refused".into()), 200)
+                .unwrap()
+                .name,
+            "Desktop probe"
+        );
     }
 
     /// A remote gateway on loopback: health, the handshake, tools/list, and
-    /// `list_libraries` answered with `libraries`.
-    async fn fake_gateway(libraries: &'static str) -> ConnectionInfo {
+    /// `list_libraries` answered with `libraries`, or with a JSON-RPC error
+    /// when it is `None`.
+    async fn fake_gateway(libraries: Option<&'static str>) -> ConnectionInfo {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -971,6 +981,12 @@ mod tests {
                     let body: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
                     let reply = if head.starts_with("GET /mcp/health") {
                         serde_json::json!({ "status": "ok", "tunnel": "connected" })
+                    } else if libraries.is_none() && body["method"] == "tools/call" {
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": body["id"],
+                            "error": { "code": -32603, "message": "Internal error" }
+                        })
                     } else if head.starts_with("POST ") && body.get("id").is_some() {
                         let result = match body["method"].as_str().unwrap_or_default() {
                             "initialize" => serde_json::json!({
@@ -1016,7 +1032,7 @@ mod tests {
             (NOT_REACHED, Some(false)),
             (FREE, None),
         ] {
-            let conn = fake_gateway(libraries).await;
+            let conn = fake_gateway(Some(libraries)).await;
             let mut checks = vec![check("Tunnel", true)];
             run_mcp_roundtrip(&mut checks, &conn).await;
             let find = |name: &str| checks.iter().find(|c| c.name == name).map(|c| c.ok);
@@ -1027,10 +1043,32 @@ mod tests {
             );
             assert_eq!(find("Desktop"), expected);
         }
-        let conn = fake_gateway(NOT_REACHED).await;
+        let conn = fake_gateway(Some(NOT_REACHED)).await;
         let mut checks = vec![check("Tunnel", false)];
         run_mcp_roundtrip(&mut checks, &conn).await;
         assert!(checks.iter().all(|c| c.name != "Desktop"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_desktop_request_gives_no_verdict_and_keeps_remote_usable() {
+        let conn = fake_gateway(None).await;
+        let mut checks = vec![check("Tunnel", true)];
+        run_mcp_roundtrip(&mut checks, &conn).await;
+        let find = |name: &str| checks.iter().find(|c| c.name == name).map(|c| c.ok);
+        assert_eq!(find("MCP"), Some(true));
+        assert_eq!(
+            find("Desktop"),
+            None,
+            "a failed request says nothing about the Desktop"
+        );
+        assert_eq!(find("Desktop probe"), Some(false));
+        let group = group(Some(checks));
+        assert_eq!(group.status(), "warning");
+        assert!(group.usable(), "`doctor --remote` must not fail on it");
+        let json = checks_json_for(group.checks.as_ref().unwrap(), "remote");
+        assert_eq!(json["hard_failures"], 0);
+        assert_eq!(json["warnings"], 1);
+        assert_eq!(json["status"], "warning");
     }
 
     fn check(name: &'static str, ok: bool) -> Check {
