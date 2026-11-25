@@ -1,5 +1,8 @@
 # Linkly AI CLI
 
+[![LinklyAI/linkly-ai-cli MCP server](https://glama.ai/mcp/servers/LinklyAI/linkly-ai-cli/badges/score.svg)](https://glama.ai/mcp/servers/LinklyAI/linkly-ai-cli)
+[![Linkly AI MCP connector](https://glama.ai/mcp/connectors/ai.linkly.mcp/linkly-ai/badges/score.svg)](https://glama.ai/mcp/connectors/ai.linkly.mcp/linkly-ai)
+
 Search and read the documents on your computer from the terminal, or give an AI agent the same access over MCP.
 
 ## What is it?
