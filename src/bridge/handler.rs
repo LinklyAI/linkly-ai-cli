@@ -49,7 +49,7 @@ impl StdioBridgeHandler {
         }
     }
 
-    /// The nine desktop tools always; in `--remote` mode also the cloud-only
+    /// The ten desktop tools always; in `--remote` mode also the cloud-only
     /// tools the gateway implements (#77), plus a `list_libraries` description
     /// that tells the truth about that connection. Local / LAN upstreams do
     /// not know these tools, so advertising them there would only produce
@@ -433,6 +433,50 @@ fn is_not_true(value: &Option<bool>) -> bool {
 }
 
 // SYNC: ExploreInput must match desktop's src/mcp/schemas.rs::ExploreInput
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyzeInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Groups of statistics to return besides the summary. Any of: \"types\" (files, bytes, words per file type), \"folders\" (largest folders, depth, two-level tree), \"time\" (by year and month, weekday-by-hour, oldest and long-untouched files, added per day), \"content\" (longest documents, word distribution, languages, authors, media duration), \"keywords\" (the most common words of the text and the topics they form; with a scope, the keywords of the documents in it), \"duplicates\" (same content; same name and size), \"names\" (common words in file names, version families, screenshots), \"agents\" (files made by AI agents), \"collections\" (libraries, notes and clips with weekly additions), \"index\" (indexing progress, whole app), \"usage\" (agent calls and searches per day, whole app). [\"all\"] returns everything. Omit for the summary alone; ask only for what you will use."
+    )]
+    pub sections: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Restrict to one local library: `local://<library-id>` or its name (see list_libraries). Cloud libraries are not supported."
+    )]
+    pub library: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Restrict to the files under this directory and its subfolders: an absolute path as other tools return it."
+    )]
+    pub path: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Restrict to these document types, as in other tools' `doc_type`, e.g. [\"pdf\", \"md\", \"image\"]."
+    )]
+    pub doc_types: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Only files modified at or after this ISO 8601 date or datetime (UTC), e.g. \"2024-01-01\"."
+    )]
+    pub modified_after: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Only files modified at or before this ISO 8601 date or datetime (UTC)."
+    )]
+    pub modified_before: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Entries per ranked list. Default 10, max 50.")]
+    pub limit: Option<u32>,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExploreInput {
@@ -834,6 +878,22 @@ impl StdioBridgeHandler {
         let args = serde_json::json!({});
 
         let outcome = self.upstream.call_tool("list_libraries", args).await;
+        self.forward(outcome, flat_bridge_error)
+    }
+
+    #[tool(
+        name = "analyze",
+        annotations(read_only_hint = true),
+        description = "[Tool boundaries: explore = a short overview to find your way around → analyze = numbers for a report, a chart or a dashboard → search/read = what the documents say.] Count and measure the user's indexed files. Returns JSON computed from the index on each call; no document is opened. The summary (files, bytes, parsed files, words, folders, languages, date range) always comes back; `sections` adds groups of statistics.\n\nUse it for how many / how big / how old / what kind questions and for reports or charts about the files, e.g. \"which folders take the most space\", \"find my duplicate files\". Do NOT use it to find or read a document (use `search` / `read`); it reports keywords and titles, not what documents say.\n\nWord counts cover parsed files only: while indexing runs, `summary.words_estimated` projects the total. Example: `{\"sections\": [\"types\", \"time\"], \"path\": \"/Users/me/Documents\"}`.\n\n**Scope**: local indexed content only; cloud libraries are NOT included."
+    )]
+    async fn analyze(
+        &self,
+        Parameters(input): Parameters<AnalyzeInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let args = serde_json::to_value(&input)
+            .map_err(|e| McpError::internal_error(format!("Serialize error: {}", e), None))?;
+
+        let outcome = self.upstream.call_tool("analyze", args).await;
         self.forward(outcome, flat_bridge_error)
     }
 
@@ -1740,7 +1800,7 @@ mod tests {
     // #77: the cloud-only tools exist only behind the cloud gateway. Advertising
     // them on a local / LAN bridge would produce "unknown tool" at the desktop.
     #[test]
-    fn remote_router_has_eleven_tools_and_local_has_nine() {
+    fn remote_router_has_twelve_tools_and_local_has_ten() {
         let local: Vec<String> = StdioBridgeHandler::build_router(false, false)
             .list_all()
             .into_iter()
@@ -1749,6 +1809,7 @@ mod tests {
         assert_eq!(
             local,
             vec![
+                "analyze",
                 "explore",
                 "find_paths",
                 "grep",
@@ -1769,6 +1830,7 @@ mod tests {
         assert_eq!(
             remote,
             vec![
+                "analyze",
                 "explore",
                 "find_paths",
                 "grep",

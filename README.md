@@ -101,6 +101,29 @@ linkly find-paths --patterns "Dropbox" --limit 5
 | `--library <name>`  | Restrict to a specific library by name                                     |
 | `--limit <N>`       | Maximum folder candidates returned (default: 10, max: 50)                  |
 
+### Analyze Your Files
+
+Count and measure the indexed files: how many, how big, how old, by type, folder, time and more. The answer is always JSON, computed from the index on each call; no document is opened. With no option it returns the summary alone.
+
+```bash
+linkly analyze
+linkly analyze --sections types,folders
+linkly analyze --sections duplicates --path /Users/me/Documents
+linkly analyze --sections all --limit 20
+```
+
+| Option                     | Description                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--sections <list>`        | Comma-separated groups: `types`, `folders`, `time`, `content`, `keywords`, `duplicates`, `names`, `agents`, `collections`, `index`, `usage`, or `all`       |
+| `--library <name>`         | Restrict to one local library (a name or `local://<id>`)                                                                                                     |
+| `--path <dir>`             | Restrict to the files under this directory and its subfolders (absolute path)                                                                                |
+| `--doc-types <list>`       | Comma-separated document types, e.g. `pdf,md,image`                                                                                                          |
+| `--modified-after <date>`  | Only files modified at or after this ISO 8601 date or datetime (UTC)                                                                                         |
+| `--modified-before <date>` | Only files modified at or before this ISO 8601 date or datetime (UTC)                                                                                        |
+| `--limit <N>`              | Entries per ranked list (default: 10, max: 50)                                                                                                               |
+
+Local files only: a cloud library is not counted. A Desktop that does not have the tool yet answers `Unknown tool`; update Desktop.
+
 ### Search Documents
 
 ```bash
@@ -425,7 +448,7 @@ LINKLY_CONFIG_DIR=~/.linkly-alice linkly search "notes" --remote
 
 ## Options
 
-Connection options (`--lan`, `--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `mcp` accepts only `--remote`. `--json` and `--client` are available on all commands.
+Connection options (`--lan`, `--endpoint`, `--token`, `--remote`) are available on `search`, `find-paths`, `analyze`, `explore`, `grep`, `outline`, `read`, `list`, `note-save`, `status`, `doctor`, and `list-libraries` commands. `mcp` accepts only `--remote`. `--json` and `--client` are available on all commands.
 
 ### Naming yourself with `--client`
 

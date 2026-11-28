@@ -103,6 +103,50 @@ pub enum Command {
         conn: ConnectionArgs,
     },
 
+    /// Count and measure the indexed files: how many, how big, how old, by type, folder, time and more (JSON)
+    #[command(after_help = "\
+Examples:
+  linkly analyze                                      # the summary alone
+  linkly analyze --sections types,folders
+  linkly analyze --sections duplicates --path /Users/me/Documents
+  linkly analyze --sections all --limit 20
+
+Sections: types, folders, time, content, keywords, duplicates, names, agents,
+collections, index, usage, or all. The answer is always JSON. Local files only:
+a cloud library is not counted (use `explore` for one).")]
+    Analyze {
+        /// Groups of statistics to return besides the summary (comma-separated), or "all"
+        #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
+        sections: Vec<String>,
+
+        /// Restrict to one local library: a plain name or local://<id>
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        library: Option<String>,
+
+        /// Restrict to the files under this directory and its subfolders (absolute path)
+        #[arg(long, value_hint = clap::ValueHint::DirPath)]
+        path: Option<String>,
+
+        /// Restrict to these document types (comma-separated), e.g. "pdf,md,image"
+        #[arg(long, value_hint = clap::ValueHint::Other, value_delimiter = ',')]
+        doc_types: Vec<String>,
+
+        /// Only files modified at or after this ISO 8601 date or datetime (UTC), e.g. 2024-01-01
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        modified_after: Option<String>,
+
+        /// Only files modified at or before this ISO 8601 date or datetime (UTC)
+        #[arg(long, value_hint = clap::ValueHint::Other)]
+        modified_before: Option<String>,
+
+        /// Entries per ranked list (default: 10, max: 50)
+        #[arg(long)]
+        limit: Option<u32>,
+
+        #[command(flatten)]
+        conn: ConnectionArgs,
+    },
+
     /// Locate folder paths by fuzzy keyword match (precursor to `search` when the actual path is unknown)
     FindPaths {
         /// Keywords to substring-match against file paths (comma-separated, OR semantics).

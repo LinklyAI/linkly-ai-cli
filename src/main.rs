@@ -252,6 +252,31 @@ async fn run(cli: Cli) -> anyhow::Result<Outcome> {
                 .await
                 .map(found)
         }
+        Command::Analyze {
+            sections,
+            library,
+            path,
+            doc_types,
+            modified_after,
+            modified_before,
+            limit,
+            conn,
+        } => {
+            let conn = resolve_conn(&conn, client)?;
+            let client = client::McpClient::connect(&conn).await?;
+            let input = commands::analyze::AnalyzeArgs {
+                sections,
+                library,
+                path,
+                doc_types,
+                modified_after,
+                modified_before,
+                limit,
+            };
+            commands::analyze::run(&client, &conn, input, json_mode)
+                .await
+                .map(found)
+        }
         Command::FindPaths {
             patterns,
             library,

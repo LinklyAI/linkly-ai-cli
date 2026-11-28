@@ -15,6 +15,7 @@ pub(crate) fn set_optional_arg<T: serde::Serialize>(
     }
 }
 
+pub mod analyze;
 pub mod auth;
 pub mod completions;
 pub mod doctor;
